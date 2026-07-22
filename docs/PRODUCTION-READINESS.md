@@ -6,13 +6,17 @@ Atualizado em 2026-07-22.
 
 - **Serviço A (Spring Boot)** — `backend/`
   - Autenticação admin (`POST /auth/login`, JWT HS256), com admin seed via migration Flyway.
-  - Recebimento de feedback (`POST /avaliação`), classificando urgência (nota ≤ 3 = CRITICA) e publicando na fila `notificacoes-criticas` quando crítico.
+  - Recebimento de feedback (`POST /avaliação`), classificando urgência (nota ≤ 3 = CRITICA) e publicando na fila `notificacoes-criticas` (com descrição, urgência e data de envio) quando crítico.
   - Consulta de relatório (`GET /relatorios/{id}`), protegida por JWT.
   - Migrations Flyway: `admins`, `avaliacoes`, `relatorios`.
 - **Serviço B (Azure Functions Java Worker puro, sem framework de aplicação)** — `functions/`
-  - Função Timer `RelatorioAgendado` — única responsabilidade: gerar relatório periódico com médias e contagens e persistir.
-  - Função Queue `FeedbackCritico` — única responsabilidade: processar a fila `notificacoes-criticas` e enviar e-mail aos admins.
+  - Função Timer `RelatorioAgendado` — única responsabilidade: gerar relatório periódico com médias, contagens por dia/urgência e a lista de avaliações (descrição, urgência, data de envio), e persistir.
+  - Função Queue `FeedbackCritico` — única responsabilidade: processar a fila `notificacoes-criticas` e enviar e-mail aos admins com descrição, urgência e data de envio.
   - Exatamente 2 funções (reduzido de um desenho anterior com 4 — ver ADR-005 em `docs/DECISIONS.md`), sem nenhum endpoint HTTP nem dependência de Quarkus/Spring nesse módulo.
+- **Infraestrutura (`infra/azure/main.bicep`)**
+  - Governança de acesso real: Managed Identity do Container App e do Function App com roles RBAC concedidas via Bicep (`AcrPull`, `Key Vault Secrets User`, `Storage Queue Data Contributor`) — não apenas identidade criada sem permissão.
+  - Segredos (`postgres-admin-password`, `jwt-secret`) armazenados no Key Vault e referenciados nativamente pelos dois serviços, nunca em texto puro nas variáveis de ambiente.
+  - Monitoramento com 2 Metric Alerts reais (exceções no Application Insights, CPU do Postgres) + Action Group de e-mail.
 
 ## Evidências locais
 
@@ -41,8 +45,10 @@ Ambiente usado para validar: Java 21 (Temurin/OpenJDK), Maven 3.8.7, Docker 29.6
 - [ ] Build/execução do container do Serviço A via `docker compose up` (não executado neste ambiente — pendente de validação em máquina com acesso de rede ao Docker Hub/Maven Central sem restrições de sandbox).
 - [ ] Deploy real em Azure (Container Apps + Functions) — depende de assinatura, permissões e recursos reais (ver `docs/AZURE-DEPLOY.md`).
 - [ ] Validação end-to-end das 2 funções serverless contra Azure Storage Queue e Azure Communication Services reais (dentro do host real do Azure Functions, não só a lógica isolada localmente).
-- [ ] Revisão de custo dos recursos provisionados por `infra/azure/main.bicep`.
+- [ ] Revisão de custo dos recursos provisionados por `infra/azure/main.bicep` (agora inclui Action Group e 2 Metric Alerts, além dos recursos já previstos).
 - [ ] Rotação do `JWT_SECRET` e da senha do admin seed antes de qualquer deploy real.
+- [ ] Sintaxe do `infra/azure/main.bicep` nunca foi validada com `az bicep`/`az deployment group validate` de verdade — este ambiente sandbox não tem Azure CLI instalado. Revisar com `az deployment group validate` antes do primeiro `create` real (ação humana obrigatória, não só recomendada).
+- [ ] Confirmar que o Container App e o Function App conseguem resolver as referências do Key Vault logo no primeiro start (pode exigir reiniciar a revision/o Function App se a role RBAC ainda não tiver se propagado — ver nota de bootstrapping em `main.bicep` e em `docs/AZURE-DEPLOY.md`).
 
 ## CI/CD
 

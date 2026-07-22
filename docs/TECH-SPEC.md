@@ -134,8 +134,8 @@ Não aplicável neste projeto — o enunciado do desafio define apenas contratos
 | **Plataforma** | Azure Container Apps | Azure Functions (Consumption/Premium) |
 | **Registro de artefatos** | Azure Container Registry (ACR) | Azure Functions deployment package (zip) via Maven plugin |
 | **Monitoramento** | Application Insights | Application Insights |
-| **Segredos** | Azure Key Vault (referenciado via variáveis de ambiente do Container App) | Azure Key Vault (referenciado via App Settings do Function App) |
-| **Identidade** | Managed Identity (acesso a Key Vault, Storage, Postgres) | Managed Identity (acesso a Key Vault, Storage, ACS) |
+| **Segredos** | Azure Key Vault, referenciado nativamente (`keyVaultUrl` + identidade gerenciada) nos `secrets` do Container App — nunca em texto puro | Azure Key Vault, referenciado via `@Microsoft.KeyVault(SecretUri=...)` no App Setting |
+| **Identidade** | Managed Identity com roles concedidas via Bicep: `AcrPull` no ACR + `Key Vault Secrets User` no Key Vault | Managed Identity com roles concedidas via Bicep: `Key Vault Secrets User` no Key Vault + `Storage Queue Data Contributor` na Storage Account |
 
 **Componentes de infraestrutura compartilhados:**
 - Azure Database for PostgreSQL — Flexible Server (banco único, acessado pelos dois serviços).
@@ -198,7 +198,9 @@ Projeto de porte pequeno — sem microsserviços em cadeia nem chamadas síncron
 - Application Insights conectado aos dois serviços (Container App e Function App) via connection string em variável de ambiente.
 - Serviço A expõe Actuator (`/actuator/health`, `/actuator/metrics`) usado como health check do Container App.
 - Serviço B não tem endpoint HTTP — as 2 funções são observadas via logs estruturados (`context.getLogger()`) e métricas nativas do Function App no Azure Monitor.
-- Alertas mínimos: falha de execução de qualquer uma das 2 funções, tamanho da fila `notificacoes-criticas` acima do esperado (indício de falha no consumidor), tempo de resposta acima do limite no Container App.
+- **Alertas provisionados de fato em `infra/azure/main.bicep`** (não só documentados): Action Group de e-mail (`alertNotificationEmail`) acionado por 2 Metric Alerts —
+  1. `alert-excecoes` — qualquer exceção reportada no Application Insights (cobre falha de execução das 2 funções e erros da API).
+  2. `alert-postgres-cpu` — CPU do PostgreSQL Flexible Server acima de 80% por 15 minutos.
 
 **Material de referência:**
 - ID `AZURE`
@@ -208,9 +210,9 @@ Projeto de porte pequeno — sem microsserviços em cadeia nem chamadas síncron
 ## 11. Segurança
 
 - HTTPS obrigatório em ambos os serviços (ingress do Container App e endpoint do Function App).
-- `JWT_SECRET` fora do código, gerenciado por Key Vault em produção.
+- `JWT_SECRET` fora do código, gerenciado por Key Vault em produção (referência nativa, nunca copiado como texto puro em variável de ambiente).
 - Senha de administrador com hash BCrypt, nunca em texto plano.
-- Managed Identity para os dois serviços acessarem Key Vault, Storage e Postgres sem connection string fixa em produção.
+- Managed Identity para os dois serviços, com **roles RBAC concedidas explicitamente em `infra/azure/main.bicep`** (não apenas identidade criada sem permissão): `AcrPull` e `Key Vault Secrets User` para o Container App; `Key Vault Secrets User` e `Storage Queue Data Contributor` para o Function App. Nenhuma tem mais acesso do que precisa.
 - RBAC no Azure restringindo quem pode alterar recursos do resource group.
 - Nenhum dado sensível (nota, descrição do feedback) exposto em logs.
 - Imagem do Container App roda com usuário não-root.

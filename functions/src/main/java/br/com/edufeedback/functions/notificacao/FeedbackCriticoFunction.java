@@ -13,7 +13,8 @@ import java.util.Map;
 /**
  * Função Queue Trigger — única responsabilidade: notificar os administradores
  * por e-mail quando o Serviço A publica uma avaliação crítica (nota <= limite)
- * na fila "notificacoes-criticas".
+ * na fila "notificacoes-criticas". O corpo do e-mail traz os 3 dados exigidos
+ * pelo enunciado: descrição, urgência e data de envio.
  *
  * Uma das 2 funções serverless do Serviço B (ver ADR-005 em docs/DECISIONS.md) —
  * sem framework de aplicação, usa JdbcRelatorioDao apenas para buscar os e-mails
@@ -37,15 +38,18 @@ public class FeedbackCriticoFunction {
 
         try (Connection conn = dao.abrirConexao()) {
             Map<?, ?> payload = objectMapper.readValue(message, Map.class);
-            String avaliacaoId = String.valueOf(payload.get("avaliacaoId"));
-            String nota = String.valueOf(payload.get("nota"));
+            String descricao = String.valueOf(payload.get("descricao"));
+            String urgencia = String.valueOf(payload.get("urgencia"));
+            String dataEnvio = String.valueOf(payload.get("dataEnvio"));
 
             List<String> emailsAdmins = dao.buscarEmailsAdmins(conn);
-            emailSender.enviar(
-                    emailsAdmins,
-                    "Feedback crítico recebido",
-                    "A avaliação " + avaliacaoId + " teve nota " + nota
-                            + ", abaixo do limite crítico. Verifique o quanto antes.");
+            String corpo = "Um feedback crítico foi recebido:\n\n"
+                    + "Descrição: " + descricao + "\n"
+                    + "Urgência: " + urgencia + "\n"
+                    + "Data de envio: " + dataEnvio + "\n\n"
+                    + "Verifique o quanto antes.";
+
+            emailSender.enviar(emailsAdmins, "Feedback crítico recebido", corpo);
 
             context.getLogger().info("Notificação de feedback crítico enviada para " + emailsAdmins.size()
                     + " administrador(es).");

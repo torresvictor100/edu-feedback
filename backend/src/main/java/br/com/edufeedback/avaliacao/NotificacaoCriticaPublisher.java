@@ -2,6 +2,8 @@ package br.com.edufeedback.avaliacao;
 
 import com.azure.storage.queue.QueueClient;
 import com.azure.storage.queue.QueueClientBuilder;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.util.Base64;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,7 +12,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Publica na fila "notificacoes-criticas" quando uma avaliação crítica é recebida.
- * A função serverless (Serviço B) consome essa fila e envia o e-mail.
+ * A função serverless (Serviço B) consome essa fila e envia o e-mail com os dados
+ * exigidos pelo enunciado: descrição, urgência e data de envio.
  */
 @Component
 public class NotificacaoCriticaPublisher {
@@ -18,6 +21,7 @@ public class NotificacaoCriticaPublisher {
     private static final Logger log = LoggerFactory.getLogger(NotificacaoCriticaPublisher.class);
 
     private final QueueClient queueClient;
+    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
     public NotificacaoCriticaPublisher(
             @Value("${azure.storage.connection-string}") String connectionString,
@@ -40,9 +44,16 @@ public class NotificacaoCriticaPublisher {
     }
 
     public void publicar(Avaliacao avaliacao) {
-        String mensagem = String.format(
-                "{\"avaliacaoId\":\"%s\",\"nota\":%d,\"criadoEm\":\"%s\"}",
-                avaliacao.getId(), avaliacao.getNota(), avaliacao.getCriadoEm());
+        String mensagem;
+        try {
+            mensagem = objectMapper.writeValueAsString(new NotificacaoCriticaPayload(
+                    avaliacao.getId().toString(),
+                    avaliacao.getDescricao(),
+                    avaliacao.getUrgencia().name(),
+                    avaliacao.getCriadoEm()));
+        } catch (Exception e) {
+            throw new IllegalStateException("Falha ao serializar notificação crítica", e);
+        }
 
         if (queueClient == null) {
             log.info("[dev] notificação crítica não enfileirada (sem Azure Storage): {}", mensagem);
@@ -51,5 +62,12 @@ public class NotificacaoCriticaPublisher {
 
         String mensagemBase64 = Base64.getEncoder().encodeToString(mensagem.getBytes());
         queueClient.sendMessage(mensagemBase64);
+    }
+
+    private record NotificacaoCriticaPayload(
+            String avaliacaoId,
+            String descricao,
+            String urgencia,
+            java.time.Instant dataEnvio) {
     }
 }

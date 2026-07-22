@@ -50,7 +50,8 @@ class JdbcRelatorioDaoIntegrationTest {
         try (Connection conn = dao.abrirConexao(); Statement stmt = conn.createStatement()) {
             stmt.execute("DROP TABLE IF EXISTS avaliacoes, relatorios, admins");
             stmt.execute("CREATE TABLE avaliacoes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), "
-                    + "nota INTEGER NOT NULL, urgencia VARCHAR(20) NOT NULL, criado_em TIMESTAMP NOT NULL DEFAULT now())");
+                    + "descricao TEXT NOT NULL, nota INTEGER NOT NULL, urgencia VARCHAR(20) NOT NULL, "
+                    + "criado_em TIMESTAMP NOT NULL DEFAULT now())");
             stmt.execute("CREATE TABLE relatorios (id UUID PRIMARY KEY, tipo VARCHAR(20) NOT NULL, "
                     + "status VARCHAR(20) NOT NULL, solicitado_em TIMESTAMP NOT NULL, concluido_em TIMESTAMP, conteudo JSONB)");
             stmt.execute("CREATE TABLE admins (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), email VARCHAR(255) NOT NULL)");
@@ -60,9 +61,9 @@ class JdbcRelatorioDaoIntegrationTest {
     @Test
     void deveCalcularMediaETotaisPorDiaEUrgencia() throws Exception {
         try (Connection conn = dao.abrirConexao(); Statement stmt = conn.createStatement()) {
-            stmt.execute("INSERT INTO avaliacoes (nota, urgencia) VALUES (9, 'NORMAL')");
-            stmt.execute("INSERT INTO avaliacoes (nota, urgencia) VALUES (2, 'CRITICA')");
-            stmt.execute("INSERT INTO avaliacoes (nota, urgencia) VALUES (7, 'NORMAL')");
+            stmt.execute("INSERT INTO avaliacoes (descricao, nota, urgencia) VALUES ('Aula boa', 9, 'NORMAL')");
+            stmt.execute("INSERT INTO avaliacoes (descricao, nota, urgencia) VALUES ('Aula ruim', 2, 'CRITICA')");
+            stmt.execute("INSERT INTO avaliacoes (descricao, nota, urgencia) VALUES ('Aula ok', 7, 'NORMAL')");
         }
 
         try (Connection conn = dao.abrirConexao()) {
@@ -71,6 +72,10 @@ class JdbcRelatorioDaoIntegrationTest {
             assertThat(agregados.totalAvaliacoes()).isEqualTo(3);
             assertThat(agregados.mediaNota()).isEqualTo(6.0);
             assertThat(agregados.quantidadePorUrgencia()).containsEntry("NORMAL", 2L).containsEntry("CRITICA", 1L);
+            assertThat(agregados.avaliacoes()).hasSize(3);
+            assertThat(agregados.avaliacoes())
+                    .extracting(AvaliacaoResumo::descricao)
+                    .contains("Aula boa", "Aula ruim", "Aula ok");
         }
     }
 

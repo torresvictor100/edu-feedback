@@ -63,7 +63,19 @@ public class JdbcRelatorioDao {
             }
         }
 
-        return new Agregados(mediaNota, total, porDia, porUrgencia, Instant.now());
+        List<AvaliacaoResumo> avaliacoes = new ArrayList<>();
+        try (PreparedStatement stmt = conn.prepareStatement(
+                "SELECT descricao, urgencia, criado_em FROM avaliacoes ORDER BY criado_em");
+                ResultSet rs = stmt.executeQuery()) {
+            while (rs.next()) {
+                avaliacoes.add(new AvaliacaoResumo(
+                        rs.getString("descricao"),
+                        rs.getString("urgencia"),
+                        rs.getTimestamp("criado_em").toInstant()));
+            }
+        }
+
+        return new Agregados(mediaNota, total, porDia, porUrgencia, avaliacoes, Instant.now());
     }
 
     public void inserirRelatorioAgendado(Connection conn, UUID id, String conteudoJson) throws SQLException {
