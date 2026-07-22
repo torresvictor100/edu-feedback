@@ -1,0 +1,22 @@
+# Segredos locais
+.env
+.env.local
+local.settings.json
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.iml
+
+# SO
+.DS_Store
+
+# Maven / Java
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# Infra
+infra/azure/main.parameters.json
