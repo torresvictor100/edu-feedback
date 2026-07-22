@@ -1,8 +1,8 @@
 // Infraestrutura como código do EduFeedback.
-// Provisiona: PostgreSQL Flexible Server, Storage Account (filas), Azure Container
-// Registry, Container Apps Environment + Container App (Serviço A), Function App
-// Consumption (Serviço B), Application Insights + Log Analytics, Key Vault e
-// Azure Communication Services (e-mail).
+// Provisiona: PostgreSQL Flexible Server, Storage Account (fila notificacoes-criticas),
+// Azure Container Registry, Container Apps Environment + Container App (Serviço A),
+// Function App Consumption (Serviço B: 2 funções — timer e queue), Application
+// Insights + Log Analytics, Key Vault e Azure Communication Services (e-mail).
 //
 // Uso: az deployment group create --resource-group <rg> --template-file main.bicep
 //      --parameters @main.parameters.example.json
@@ -78,11 +78,6 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
 resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-01-01' = {
   parent: storageAccount
   name: 'default'
-}
-
-resource filaSolicitacoesRelatorio 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-01-01' = {
-  parent: queueService
-  name: 'solicitacoes-relatorio'
 }
 
 resource filaNotificacoesCriticas 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-01-01' = {
@@ -214,7 +209,6 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
         { name: 'POSTGRES_DB', value: 'edufeedback' }
         { name: 'POSTGRES_USER', value: postgresAdminLogin }
         { name: 'POSTGRES_PASSWORD', value: postgresAdminPassword }
-        { name: 'JWT_SECRET', value: jwtSecret }
         { name: 'RELATORIO_AGENDADO_CRON', value: '0 0 8 * * 1' }
         { name: 'APPINSIGHTS_INSTRUMENTATIONKEY', value: appInsights.properties.InstrumentationKey }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }

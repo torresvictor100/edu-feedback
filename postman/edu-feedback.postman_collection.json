@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "EduFeedback",
-    "description": "Coleção de testes manuais do EduFeedback: Serviço A (API principal, Spring Boot) e Serviço B (funções serverless, Quarkus/Azure Functions).",
+    "description": "Coleção de testes manuais do EduFeedback: Serviço A (API principal, Spring Boot). O Serviço B (2 funções serverless: timer de relatório agendado e queue de notificação crítica) não expõe nenhum endpoint HTTP — não é testável via Postman. Para verificar as funções, acompanhe os logs no Application Insights / portal do Function App, ou rode `mvn azure-functions:run` localmente com Azure Functions Core Tools e acione manualmente pelo portal.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -96,7 +96,9 @@
                 "exec": [
                   "pm.test('Status 201', () => pm.response.to.have.status(201));",
                   "const body = pm.response.json();",
-                  "pm.test('Urgência CRITICA', () => pm.expect(body.urgencia).to.eql('CRITICA'));"
+                  "pm.test('Urgência CRITICA', () => pm.expect(body.urgencia).to.eql('CRITICA'));",
+                  "// Esta requisição enfileira uma notificação em \"notificacoes-criticas\";",
+                  "// FeedbackCriticoFunction (Serviço B) consome e envia o e-mail — verificar nos logs do Function App."
                 ]
               }
             }
@@ -127,57 +129,11 @@
           ]
         }
       ]
-    },
-    {
-      "name": "Serviço B - Funções serverless",
-      "item": [
-        {
-          "name": "Health check (função HTTP)",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": { "raw": "{{functionsBaseUrl}}/health", "host": ["{{functionsBaseUrl}}"], "path": ["health"] }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": ["pm.test('Status 200', () => pm.response.to.have.status(200));"]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Solicitar relatório sob demanda",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
-            "url": {
-              "raw": "{{functionsBaseUrl}}/relatorios/solicitacoes",
-              "host": ["{{functionsBaseUrl}}"],
-              "path": ["relatorios", "solicitacoes"]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test('Status 202', () => pm.response.to.have.status(202));",
-                  "const body = pm.response.json();",
-                  "pm.test('Status PROCESSANDO', () => pm.expect(body.status).to.eql('PROCESSANDO'));",
-                  "pm.environment.set('relatorioId', body.id);"
-                ]
-              }
-            }
-          ]
-        }
-      ]
     }
   ],
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8080" },
-    { "key": "functionsBaseUrl", "value": "http://localhost:7071/api" },
-    { "key": "token", "value": "" }
+    { "key": "token", "value": "" },
+    { "key": "relatorioId", "value": "", "description": "Preencher com o id gerado por RelatorioAgendadoFunction (Serviço B) — consultar direto na tabela relatorios, já que não há endpoint para listá-los nesta versão." }
   ]
 }

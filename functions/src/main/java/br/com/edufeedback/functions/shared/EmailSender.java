@@ -7,9 +7,9 @@ import java.util.List;
 import java.util.logging.Logger;
 
 /**
- * Envio de e-mail via Azure Communication Services. Usada pelas funções Timer
- * e Queue trigger (não têm acesso ao CDI do Quarkus — ver ADR-004), por isso é
- * uma classe simples, sem anotações de framework.
+ * Envio de e-mail via Azure Communication Services. Usada pela função Queue
+ * trigger do Serviço B (ver ADR-005 em docs/DECISIONS.md) — classe simples,
+ * sem anotações de framework.
  */
 public class EmailSender {
 

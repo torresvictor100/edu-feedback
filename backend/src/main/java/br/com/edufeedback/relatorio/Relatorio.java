@@ -12,9 +12,9 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 /**
- * Entidade só de leitura no Serviço A: quem grava relatórios "AGENDADO" e
- * "SOB_DEMANDA" são as funções do Serviço B (Quarkus/Functions), que escrevem
- * diretamente na mesma tabela via JDBC. O Serviço A apenas consulta.
+ * Entidade só de leitura no Serviço A: quem grava relatórios "AGENDADO" é a
+ * função RelatorioAgendadoFunction do Serviço B, que escreve diretamente na
+ * mesma tabela via JDBC. O Serviço A apenas consulta.
  */
 @Entity
 @Table(name = "relatorios")

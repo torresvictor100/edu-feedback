@@ -15,7 +15,7 @@ O projeto precisará atender ao requisito obrigatório do Tech Challenge Fase 4:
 
 ### Decisão
 
-Arquitetura de dois serviços: Java 21 + Spring Boot 3 + Maven + Spring Data JPA + Flyway + PostgreSQL para a API principal (login, feedback, consulta de relatório); Java 21 + Quarkus 3 + Maven para as funções serverless (timer, HTTP, queue, notificação), compartilhando o mesmo banco PostgreSQL.
+Arquitetura de dois serviços: Java 21 + Spring Boot 3 + Maven + Spring Data JPA + Flyway + PostgreSQL para a API principal (login, feedback, consulta de relatório); Java 21 + Azure Functions Java Worker puro (sem framework de aplicação) + Maven para as 2 funções serverless (timer de relatório agendado, queue de notificação crítica — ver ADR-005), compartilhando o mesmo banco PostgreSQL.
 
 ### Consequências
 
@@ -64,18 +64,39 @@ Nenhum segredo em código, logs ou arquivos versionados. Deployments precisam co
 ## ADR-004 — Empacotamento híbrido do Serviço B (Quarkus + Azure Functions Java Worker)
 
 - Data: 2026-07-22
+- Estado: substituída (ver ADR-005)
+
+### Contexto
+
+Versão inicial do desenho tinha 4 funções: timer (relatório agendado), HTTP (solicitação sob demanda), queue (processamento do relatório) e queue (notificação de feedback crítico). A extensão oficial `quarkus-azure-functions-http` só suporta função com HTTP trigger, o que exigia misturar Quarkus CDI (na função HTTP) com Azure Functions Java Worker puro (nas demais) no mesmo módulo.
+
+### Decisão (substituída)
+
+Esta ADR foi substituída pela ADR-005 após a decisão de reduzir o Serviço B a exatamente 2 funções, eliminando a função HTTP e, com ela, toda a necessidade de Quarkus no módulo `functions/`.
+
+---
+
+## ADR-005 — Redução a 2 funções serverless, sem framework de aplicação no Serviço B
+
+- Data: 2026-07-22
 - Estado: aceita
 
 ### Contexto
 
-O desafio exige no mínimo duas funções serverless com responsabilidade única. O desenho aprovado tem 4 funções: timer (relatório agendado), HTTP (solicitação sob demanda), queue (processamento do relatório) e queue (notificação de feedback crítico). A extensão oficial `quarkus-azure-functions-http` só suporta função com **HTTP trigger** — ela expõe a API REST inteira do Quarkus atrás de uma única function HTTP, e não tem suporte nativo a Timer/Queue trigger com CDI/Panache.
+O enunciado exige no mínimo 2 funções serverless com responsabilidade única, e pede como avaliação "a correta separação dos serviços e responsabilidades". O desenho anterior (ADR-004, 4 funções) tinha um ponto fraco de responsabilidade única: a função de processamento de relatório sob demanda misturava "gerar relatório" com "notificar que ficou pronto por e-mail". A decisão do usuário foi simplificar para as 2 funções que mapeiam direto nas duas automações que o próprio enunciado pede ("o envio de notificações e a geração de relatórios"), eliminando o fluxo de solicitação sob demanda por completo.
 
 ### Decisão
 
-No módulo `functions/`, a função HTTP (solicitação sob demanda) usa Quarkus de verdade (RESTEasy Reactive + Panache + CDI) via `quarkus-azure-functions-http`. As funções de Timer e Queue trigger usam o modelo padrão do Azure Functions Java Worker (`azure-functions-java-library`, anotações `@FunctionName`), no mesmo módulo Maven, acessando o Postgres via JDBC simples em vez de CDI/Panache — essas funções não rodam dentro do container ArC do Quarkus.
+Serviço B passa a ter exatamente 2 funções, cada uma com um único trigger e uma única responsabilidade:
+
+1. **`FeedbackCriticoFunction`** — Queue Trigger na fila `notificacoes-criticas`. Única responsabilidade: enviar e-mail de alerta ao(s) administrador(es) quando chega uma avaliação crítica (nota ≤ limite). Não calcula nada, não persiste nada.
+2. **`RelatorioAgendadoFunction`** — Timer Trigger (periodicidade configurável via `RELATORIO_AGENDADO_CRON`). Única responsabilidade: calcular médias/contagens das avaliações e persistir um novo relatório. Não envia e-mail, não recebe requisição.
+
+Como nenhuma das duas funções precisa de HTTP, CDI ou ORM reativo, o módulo `functions/` deixa de depender do Quarkus inteiramente — vira um projeto Azure Functions Java puro (`azure-functions-java-library` + `azure-functions-maven-plugin`), usando `JdbcRelatorioDao` (JDBC simples) para acessar o Postgres compartilhado com o Serviço A.
 
 ### Consequências
 
-O módulo `functions/` mistura dois estilos de código (Quarkus CDI para a função HTTP, JDBC simples para as demais). Isso é documentado em `ARCHITECTURE.md` e deve ser explicado na avaliação do desafio como parte do "modelo de cloud escolhido e dos componentes envolvidos". Qualquer nova função Timer/Queue segue o mesmo padrão JDBC simples das já existentes, reaproveitando `shared/JdbcRelatorioDao.java`.
-
-Nenhuma ADR adicional na criação inicial.
+- A fila `solicitacoes-relatorio` e o endpoint de solicitação sob demanda deixam de existir — não há mais forma de o admin pedir um relatório "avulso"; ele só recebe relatórios pela geração agendada.
+- `infra/azure/main.bicep` não provisiona mais essa fila.
+- O módulo `functions/` fica mais simples de explicar na avaliação: 2 componentes, 2 responsabilidades, sem mistura de estilos de código.
+- Se o admin precisar de relatórios sob demanda no futuro, a forma mais simples de reintroduzir isso é um endpoint comum (síncrono) no Serviço A — não como função serverless — para não reabrir a mistura de responsabilidades identificada aqui.

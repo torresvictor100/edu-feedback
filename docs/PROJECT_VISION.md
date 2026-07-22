@@ -37,17 +37,17 @@ Nenhum princípio adicional definido na criação.
 ## Roles de usuário
 
 - **ESTUDANTE**: não tem conta no sistema. Envia avaliações de aula via `POST /avaliação`, endpoint público, sem autenticação — exatamente como o contrato do desafio define.
-- **ADMIN**: possui conta e faz login via JWT. Consulta relatórios prontos, recebe notificação por e-mail quando chega um feedback crítico e é avisado por e-mail quando um relatório solicitado sob demanda fica pronto.
+- **ADMIN**: possui conta e faz login via JWT. Consulta relatórios prontos e recebe notificação por e-mail quando chega um feedback crítico.
 
 ## Módulos planejados para o lançamento
 
 1. **Autenticação admin** — login com e-mail/senha, emissão de JWT.
 2. **Recebimento de feedback** — `POST /avaliação`, valida e persiste nota (0–10) e descrição.
-3. **Notificação de feedback crítico** — função serverless disparada quando a nota é ≤ 3, envia e-mail ao(s) administrador(es).
-4. **Geração de relatório agendado** — função serverless com timer configurável, gera relatório com médias e contagens.
-5. **Solicitação de relatório sob demanda** — função HTTP que recebe o pedido do admin e enfileira o processamento.
-6. **Processamento assíncrono do relatório** — função disparada pela fila, gera o relatório de fato e avisa o admin quando pronto.
-7. **Consulta de relatório** — `GET /relatorios/{id}`, retorna o relatório já processado.
+3. **Notificação de feedback crítico** — função serverless (Queue Trigger) disparada quando a nota é ≤ 3, envia e-mail ao(s) administrador(es).
+4. **Geração de relatório agendado** — função serverless (Timer Trigger) com periodicidade configurável, gera relatório com médias e contagens.
+5. **Consulta de relatório** — `GET /relatorios/{id}`, retorna o relatório já processado.
+
+Serviço B tem exatamente essas 2 funções serverless (3 e 4 acima) — decisão registrada na ADR-005 em `DECISIONS.md`, reduzindo de um desenho anterior com 4 funções para manter responsabilidade única sem ambiguidade.
 
 ## Fora do escopo inicial
 
@@ -57,3 +57,4 @@ Nenhum princípio adicional definido na criação.
 - Mensageria com Kafka/RabbitMQ (usando Azure Storage Queue, suficiente para este volume).
 - Bancos NoSQL (MongoDB/Cassandra) — apenas PostgreSQL.
 - Multi-tenant / múltiplos cursos — o desafio trata de um único curso/plataforma.
+- Solicitação de relatório sob demanda (existiu numa versão anterior; removida para manter o Serviço B com só 2 funções de responsabilidade única — ver ADR-005).

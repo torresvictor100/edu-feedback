@@ -14,10 +14,9 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Acesso a dados via JDBC simples (sem CDI/Panache) para as funções Timer e
- * Queue trigger — elas não rodam dentro do container ArC do Quarkus (ver
- * ADR-004 em docs/DECISIONS.md). O schema é de propriedade do Serviço A
- * (Flyway); esta classe nunca cria ou altera tabelas.
+ * Acesso a dados via JDBC simples para as 2 funções do Serviço B (Timer e
+ * Queue trigger — ver ADR-005 em docs/DECISIONS.md). O schema é de propriedade
+ * do Serviço A (Flyway); esta classe nunca cria ou altera tabelas.
  */
 public class JdbcRelatorioDao {
 

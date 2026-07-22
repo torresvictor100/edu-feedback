@@ -10,7 +10,7 @@ Estudantes enviam avaliações de aula (nota de 0 a 10 e descrição) através d
 
 Antes de trabalhar neste repositório:
 
-1. Leia `docs/TECH-SPEC.md` — **primeira leitura obrigatória**. Define todas as tecnologias aprovadas, justificativas e regras do projeto, incluindo a arquitetura de dois serviços (Serviço A Spring Boot / Serviço B Quarkus).
+1. Leia `docs/TECH-SPEC.md` — **primeira leitura obrigatória**. Define todas as tecnologias aprovadas, justificativas e regras do projeto, incluindo a arquitetura de dois serviços (Serviço A Spring Boot / Serviço B Azure Functions Java puro).
 2. Leia `skills/trabalhar-em-edu-feedback/SKILL.md`.
 3. Leia `docs/PROJECT_VISION.md`.
 4. Leia `docs/ARCHITECTURE.md`.
@@ -33,10 +33,9 @@ Os IDs abaixo referenciam a legenda completa (caminho de arquivo e fase) em `/ho
 | **Deploy no Azure** (Container Apps, Functions) | AZURE |
 | **Configurar Azure Container Registry, imagens no Azure** | AZURE |
 | **Configurar Azure Application Insights, alertas, logs** | AZURE |
-| **Criar ou alterar uma das 4 Azure Functions (serverless, event-driven)** | SERVERLESS |
+| **Criar ou alterar uma das 2 Azure Functions (serverless, event-driven)** | SERVERLESS |
 | **Decidir modelo de cloud (IaaS/PaaS/SaaS/FaaS)** | CLOUD |
 | **Segurança no Azure (IAM, RBAC, Key Vault, Managed Identity)** | CLOUD |
-| Criar API REST com Quarkus, Panache, RESTEasy Reactive | QUARKUS |
 | Criar Dockerfile, configurar imagem, docker-compose.yml | DOCKER |
 | Criar API REST com Spring MVC, Controller, ResponseEntity | REST |
 | Criar entidades JPA, Repository, migrations Postgres | JPA-NOSQL |
@@ -46,9 +45,10 @@ Os IDs abaixo referenciam a legenda completa (caminho de arquivo e fase) em `/ho
 
 **Regras de infraestrutura:**
 - Toda decisão de infraestrutura usa Microsoft Azure como plataforma (referência primária: ID `AZURE`).
-- Serviço A (Spring Boot) é deployado em Azure Container Apps; Serviço B (Quarkus/Functions) em Azure Functions. Nunca inverter essa divisão sem nova ADR aprovada.
+- Serviço A (Spring Boot) é deployado em Azure Container Apps; Serviço B (Azure Functions Java puro, sem framework de aplicação) em Azure Functions. Nunca inverter essa divisão sem nova ADR aprovada.
+- Serviço B tem exatamente 2 funções (timer + queue), cada uma com responsabilidade única — ver ADR-005 em `docs/DECISIONS.md`. Nunca adicionar um endpoint HTTP nem reintroduzir a solicitação de relatório sob demanda como função serverless sem nova ADR aprovada; se essa funcionalidade voltar, deve ser um endpoint comum do Serviço A.
 - Migrations Flyway são de propriedade exclusiva do Serviço A. O Serviço B nunca cria ou altera schema.
-- Segredos (JWT_SECRET, connection strings) só em Key Vault/variável de ambiente, nunca versionados.
+- Segredos (JWT_SECRET, connection strings) só em Key Vault/variável de ambiente, nunca versionados. `JWT_SECRET` é usado somente pelo Serviço A — o Serviço B não valida JWT.
 
 **Regra geral:** não implemente de memória. Consulte o material correspondente à tecnologia aprovada e aplique somente convenções compatíveis com a stack registrada em `docs/TECH-SPEC.md`.
 
@@ -77,7 +77,7 @@ Uma autorização como "crie", "pode fazer" ou equivalente aprova apenas o escop
 - Mantenha nomes técnicos de código em inglês quando a tecnologia adotada favorecer essa convenção.
 - Nenhum kit de identidade visual aplicado neste projeto (sem frontend).
 
-- ADMIN é o único perfil autenticado; toda rota de consulta de relatório e a função de solicitação sob demanda exigem JWT válido com esse papel. ESTUDANTE não tem conta — o envio de feedback é público, sem diferenciação artificial de permissão além do contrato do enunciado.
+- ADMIN é o único perfil autenticado; toda rota de consulta de relatório no Serviço A exige JWT válido com esse papel. ESTUDANTE não tem conta — o envio de feedback é público, sem diferenciação artificial de permissão além do contrato do enunciado.
 
 ## Requisitos mínimos de um módulo
 
@@ -94,4 +94,4 @@ Nenhuma regra adicional definida na criação.
 
 ## Estado atual
 
-Projeto criado em 2026-07-22. Escopo inicial implementado: autenticação admin, recebimento de feedback, 4 funções serverless (timer, HTTP, queue, notificação crítica), consulta de relatório. Ver `docs/PRODUCTION-READINESS.md` para o estado exato de build/testes e pendências humanas de deploy.
+Projeto criado em 2026-07-22. Escopo inicial implementado: autenticação admin, recebimento de feedback, 2 funções serverless (timer de relatório agendado, queue de notificação crítica), consulta de relatório. Ver `docs/PRODUCTION-READINESS.md` para o estado exato de build/testes e pendências humanas de deploy.

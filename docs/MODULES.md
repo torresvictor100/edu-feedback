@@ -56,30 +56,6 @@ Seguir o processo definido em `NEW_MODULE_GUIDE.md` antes de adicionar um módul
 - Responsável pela lógica: módulo `timer` no Serviço B (`functions/`).
 - Limitações conhecidas: periodicidade fixa por configuração, não por regra de negócio dinâmica.
 
-### Solicitação de relatório sob demanda
-
-- ID: `relatorio-sob-demanda`
-- Estado: `disponível`
-- Data de inclusão: 2026-07-22
-- Categoria: produto
-- Rotas principais: `POST /relatorios/solicitacoes` (Serviço B, função HTTP, JWT admin)
-- Propósito: administrador pede um relatório quando quiser; como a geração demora, o pedido é enfileirado e processado depois.
-- Público: administradores.
-- Responsável pela lógica: módulo `relatorio` no Serviço B (`functions/`).
-- Limitações conhecidas: resposta é assíncrona (202 + id), o cliente precisa consultar depois.
-
-### Processamento assíncrono do relatório
-
-- ID: `relatorio-processamento`
-- Estado: `disponível`
-- Data de inclusão: 2026-07-22
-- Categoria: infraestrutura
-- Rotas principais: função `ProcessarRelatorioFunction` (Queue Trigger, fila `solicitacoes-relatorio`)
-- Propósito: gerar de fato o relatório solicitado sob demanda e avisar o admin por e-mail quando ficar pronto.
-- Público: administradores (indireto, via e-mail e via consulta posterior).
-- Responsável pela lógica: módulo `queue` no Serviço B (`functions/`).
-- Limitações conhecidas: sem retry customizado além do padrão do Azure Storage Queue.
-
 ### Consulta de relatório
 
 - ID: `relatorio-consulta`
@@ -87,10 +63,10 @@ Seguir o processo definido em `NEW_MODULE_GUIDE.md` antes de adicionar um módul
 - Data de inclusão: 2026-07-22
 - Categoria: produto
 - Rotas principais: `GET /relatorios/{id}` (Serviço A, JWT admin)
-- Propósito: administrador consulta o status e o conteúdo de um relatório (agendado ou sob demanda).
+- Propósito: administrador consulta o status e o conteúdo de um relatório.
 - Público: administradores.
 - Responsável pela lógica: módulo `relatorio` no Serviço A (`backend/`).
-- Limitações conhecidas: nenhuma listagem paginada de todos os relatórios nesta primeira versão, apenas consulta por id.
+- Limitações conhecidas: nenhuma listagem paginada de todos os relatórios nesta primeira versão, apenas consulta por id. Só existem relatórios do tipo agendado (ver ADR-005 em `DECISIONS.md` — solicitação sob demanda foi removida).
 
 ---
 

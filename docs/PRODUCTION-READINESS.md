@@ -9,11 +9,10 @@ Atualizado em 2026-07-22.
   - Recebimento de feedback (`POST /avaliação`), classificando urgência (nota ≤ 3 = CRITICA) e publicando na fila `notificacoes-criticas` quando crítico.
   - Consulta de relatório (`GET /relatorios/{id}`), protegida por JWT.
   - Migrations Flyway: `admins`, `avaliacoes`, `relatorios`.
-- **Serviço B (Quarkus + Azure Functions Java Worker)** — `functions/`
-  - Função HTTP `POST /relatorios/solicitacoes` (Quarkus real, RESTEasy Reactive + Panache), valida JWT com papel ADMIN, cria o registro do relatório e enfileira o processamento.
-  - Função Timer `RelatorioAgendado` — gera relatório periódico com médias e contagens.
-  - Função Queue `ProcessarRelatorio` — processa a fila `solicitacoes-relatorio`, gera o relatório e avisa os admins por e-mail.
-  - Função Queue `FeedbackCritico` — processa a fila `notificacoes-criticas` e envia e-mail aos admins.
+- **Serviço B (Azure Functions Java Worker puro, sem framework de aplicação)** — `functions/`
+  - Função Timer `RelatorioAgendado` — única responsabilidade: gerar relatório periódico com médias e contagens e persistir.
+  - Função Queue `FeedbackCritico` — única responsabilidade: processar a fila `notificacoes-criticas` e enviar e-mail aos admins.
+  - Exatamente 2 funções (reduzido de um desenho anterior com 4 — ver ADR-005 em `docs/DECISIONS.md`), sem nenhum endpoint HTTP nem dependência de Quarkus/Spring nesse módulo.
 
 ## Evidências locais
 
@@ -23,10 +22,10 @@ Comandos efetivamente executados nesta máquina de desenvolvimento:
 cd backend && ./mvnw -q test
 # Resultado: BUILD SUCCESS — 13 testes (unitários + integração com Testcontainers/Postgres real)
 
-cd functions && mvn -q test
-# Resultado: ver docs/PRODUCTION-READINESS.md atualizado após a última execução local;
-# testes cobrem AgregadosJsonSerializer (unitário puro) e SolicitarRelatorioResource
-# (@QuarkusTest, Dev Services com Postgres via Testcontainers)
+cd functions && mvn -q clean test
+# Resultado: BUILD SUCCESS — testes cobrem AgregadosJsonSerializer (unitário puro) e
+# JdbcRelatorioDao (integração com Postgres real via Testcontainers, schema mínimo
+# criado no próprio teste)
 ```
 
 Ambiente usado para validar: Java 21 (Temurin/OpenJDK), Maven 3.8.7, Docker 29.6.1. O ambiente sandbox onde este projeto foi gerado tinha um Docker Engine muito recente (API 1.55); foi necessário fixar a versão do Testcontainers em 1.21.4 (nos dois módulos) para a negociação de versão da API funcionar — deixe essa nota caso o mesmo sintoma ("client version X.XX is too old") apareça em outro ambiente.
@@ -41,7 +40,7 @@ Ambiente usado para validar: Java 21 (Temurin/OpenJDK), Maven 3.8.7, Docker 29.6
 - [x] Coleção Postman validada como JSON (`python3 -m json.tool`).
 - [ ] Build/execução do container do Serviço A via `docker compose up` (não executado neste ambiente — pendente de validação em máquina com acesso de rede ao Docker Hub/Maven Central sem restrições de sandbox).
 - [ ] Deploy real em Azure (Container Apps + Functions) — depende de assinatura, permissões e recursos reais (ver `docs/AZURE-DEPLOY.md`).
-- [ ] Validação end-to-end das 4 funções serverless contra Azure Storage Queue e Azure Communication Services reais.
+- [ ] Validação end-to-end das 2 funções serverless contra Azure Storage Queue e Azure Communication Services reais (dentro do host real do Azure Functions, não só a lógica isolada localmente).
 - [ ] Revisão de custo dos recursos provisionados por `infra/azure/main.bicep`.
 - [ ] Rotação do `JWT_SECRET` e da senha do admin seed antes de qualquer deploy real.
 
@@ -54,6 +53,7 @@ Ambiente usado para validar: Java 21 (Temurin/OpenJDK), Maven 3.8.7, Docker 29.6
 
 - O admin seed (`admin@edufeedback.local` / `admin123`) existe apenas para desenvolvimento local — trocar a senha (ou remover o seed) antes de qualquer deploy real é dependência humana.
 - Não há endpoint de cadastro de novo admin nesta primeira versão — novos admins entram via migration adicional.
-- A extensão `quarkus-azure-functions-http` empacota só a função HTTP; as funções Timer/Queue usam o modelo padrão do Azure Functions Java Worker no mesmo módulo (ADR-004) — isso nunca foi testado dentro do host real do Azure Functions (Core Tools/Azure), só a lógica de negócio isolada foi validada localmente.
+- As 2 funções do Serviço B nunca foram testadas dentro do host real do Azure Functions (Core Tools/Azure) — só a lógica de negócio isolada (`JdbcRelatorioDao`, `AgregadosJsonSerializer`) foi validada localmente com Testcontainers.
+- Não há mais forma de o admin solicitar um relatório sob demanda — essa função foi removida (ADR-005) para manter o Serviço B com responsabilidade única e sem ambiguidade em cada componente. Se for reintroduzida, deve ser um endpoint comum (síncrono) do Serviço A, não uma nova função serverless que misture geração e notificação.
 - Nenhum recurso Azure foi criado; `infra/azure/main.bicep` não foi executado (`az deployment group create` não foi rodado).
-- Sem teste de carga ou de resiliência das filas além do comportamento padrão do Azure Storage Queue.
+- Sem teste de carga ou de resiliência da fila além do comportamento padrão do Azure Storage Queue.

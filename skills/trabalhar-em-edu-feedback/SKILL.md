@@ -16,7 +16,7 @@ Implementar demandas de código com escopo controlado, aprovação prévia e pre
 0. Checar a branch atual (`git branch --show-current`). Se existir uma branch `develop` e o HEAD não estiver nela, avisar o usuário e pedir confirmação para trocar antes de continuar — os documentos abaixo (`AGENTS.md`, `docs/`, `skills/`) só existem em `develop`; a branch `main` é a versão pública, sem eles.
 1. Ler `../../AGENTS.md`.
 2. Ler `../../docs/PROJECT_VISION.md` e `../../docs/ARCHITECTURE.md`.
-3. Ler `../../docs/DECISIONS.md` (em especial ADR-004, sobre o empacotamento híbrido do Serviço B).
+3. Ler `../../docs/DECISIONS.md` (em especial ADR-005, sobre a redução do Serviço B a 2 funções sem framework de aplicação).
 4. Para nova feature ou módulo, ler `../../docs/NEW_MODULE_GUIDE.md`.
 5. Consultar `../../docs/MODULES.md` para evitar duplicidade.
 6. Se a demanda envolver deploy ou infraestrutura, ler também `../../docs/AZURE-DEPLOY.md` e `../../docs/PRODUCTION-READINESS.md`.
@@ -40,9 +40,11 @@ Se a conversa já contiver uma proposta aceita, executar somente o escopo aceito
 
 Dois serviços Java 21 / Maven:
 - **Serviço A** (`backend/`) — Spring Boot 3.3.x, Spring Data JPA, Flyway, PostgreSQL 16, Spring Security + `jjwt` para JWT.
-- **Serviço B** (`functions/`) — Quarkus 3.x para a função HTTP (via `quarkus-azure-functions-http`, RESTEasy Reactive + Panache); Azure Functions Java Worker puro (`@FunctionName`, JDBC simples) para as funções Timer e Queue.
+- **Serviço B** (`functions/`) — Azure Functions Java Worker puro (`azure-functions-java-library`, anotações `@FunctionName`), sem framework de aplicação. Exatamente 2 funções: `RelatorioAgendadoFunction` (Timer) e `FeedbackCriticoFunction` (Queue). Acesso ao Postgres via JDBC simples (`shared/JdbcRelatorioDao`).
 
-Mensageria: Azure Storage Queue (`solicitacoes-relatorio`, `notificacoes-criticas`). E-mail: Azure Communication Services. Deploy: Serviço A em Azure Container Apps, Serviço B em Azure Functions.
+Mensageria: Azure Storage Queue (`notificacoes-criticas`). E-mail: Azure Communication Services. Deploy: Serviço A em Azure Container Apps, Serviço B em Azure Functions.
+
+Não adicionar uma 3ª função nem um endpoint HTTP no Serviço B sem nova ADR aprovada — a redução a 2 funções foi decisão explícita do usuário (ADR-005), especificamente para manter responsabilidade única sem ambiguidade em cada componente.
 
 Mudanças de stack exigem nova ADR aprovada em `../../docs/DECISIONS.md`.
 
@@ -50,11 +52,12 @@ Mudanças de stack exigem nova ADR aprovada em `../../docs/DECISIONS.md`.
 
 ## Convenções de código
 
-- Organizar por módulo de domínio (`auth`, `avaliacao`, `relatorio`, e no Serviço B `relatorio`, `timer`, `queue`, `notificacao`), nunca por camada técnica pura.
-- Controller/Resource: recebe HTTP, valida entrada, delega ao Service. Nunca lógica de negócio no controller.
+- Organizar por módulo de domínio (`auth`, `avaliacao`, `relatorio` no Serviço A; `timer`, `notificacao` no Serviço B), nunca por camada técnica pura.
+- Controller (Serviço A): recebe HTTP, valida entrada, delega ao Service. Nunca lógica de negócio no controller.
+- Classe `@FunctionName` (Serviço B): recebe o gatilho, delega a lógica para `shared/`. Nunca lógica de negócio direto na classe da função.
 - Migrations Flyway são exclusivas do Serviço A; o Serviço B nunca cria/altera schema.
 - Segredos somente em `.env`/variável de ambiente/Key Vault, nunca versionados.
-- Testes proporcionais ao risco: MockMvc para controllers do Serviço A, Testcontainers para o que toca banco, `@QuarkusTest` para a função HTTP do Serviço B, testes unitários simples para a lógica JDBC das funções Timer/Queue.
+- Testes proporcionais ao risco: MockMvc + Testcontainers para o Serviço A; testes unitários (AssertJ) para lógica pura e Testcontainers direto contra `JdbcRelatorioDao` para o que toca banco no Serviço B.
 - Português do Brasil em documentação e textos de produto; nomes técnicos de código em inglês quando a convenção da stack favorecer.
 
 ---
@@ -73,7 +76,7 @@ Nenhuma regra adicional além das descritas acima.
 
 ### Funções Timer e Queue (Serviço B)
 
-Essas funções **não** têm acesso ao container CDI do Quarkus (ver ADR-004). Não tente injetar `@Inject` nelas nem usar entidades Panache — use `shared/JdbcRelatorioDao` (ou crie um DAO JDBC simples equivalente) para acessar o Postgres.
+Não há nenhum framework de aplicação nesse módulo (ver ADR-005) — nada de `@Inject`, CDI ou ORM. Use `shared/JdbcRelatorioDao` (ou crie um DAO JDBC simples equivalente) para acessar o Postgres, e `shared/EmailSender` para envio de e-mail.
 
 ---
 

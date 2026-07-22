@@ -14,8 +14,8 @@ import java.util.UUID;
  * relatório de médias e contagens de avaliações. Periodicidade configurada
  * via app setting RELATORIO_AGENDADO_CRON (formato NCRONTAB do Azure Functions).
  *
- * Não roda dentro do CDI do Quarkus (ver ADR-004 em docs/DECISIONS.md) —
- * usa JdbcRelatorioDao diretamente.
+ * Uma das 2 funções serverless do Serviço B (ver ADR-005 em docs/DECISIONS.md) —
+ * sem framework de aplicação, acessa o Postgres via JdbcRelatorioDao diretamente.
  */
 public class RelatorioAgendadoFunction {
 

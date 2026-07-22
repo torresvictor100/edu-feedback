@@ -9,10 +9,10 @@ Este runbook prepara a primeira publicação de `edu-feedback` sem armazenar cre
 | Recurso | Nome (padrão `{recurso}-edufeedback-{ambiente}`) | Papel |
 |---|---|---|
 | PostgreSQL Flexible Server | `psql-edufeedback-<ambiente>` | Banco compartilhado pelos dois serviços |
-| Storage Account + 2 filas | `stedufeedback<ambiente>` | Filas `solicitacoes-relatorio` e `notificacoes-criticas` |
+| Storage Account + 1 fila | `stedufeedback<ambiente>` | Fila `notificacoes-criticas` |
 | Azure Container Registry | `acredufeedback<ambiente>` | Imagem do Serviço A |
 | Container Apps Environment + Container App | `cae-`/`app-edufeedback-<ambiente>` | Deploy do Serviço A (API) |
-| Function App (Consumption, Linux, Java 21) + App Service Plan | `func-`/`asp-edufeedback-<ambiente>` | Deploy do Serviço B (funções) |
+| Function App (Consumption, Linux, Java 21) + App Service Plan | `func-`/`asp-edufeedback-<ambiente>` | Deploy do Serviço B (2 funções: timer + queue) |
 | Application Insights + Log Analytics | `appi-`/`log-edufeedback-<ambiente>` | Observabilidade dos dois serviços |
 | Key Vault | `kv-edufeedback-<ambiente>` | Guarda de segredos (RBAC habilitado) |
 | Azure Communication Services | `acs-edufeedback-<ambiente>` | Envio de e-mail |
@@ -72,12 +72,12 @@ Após o provisionamento inicial, os deploys seguintes do código (imagem do back
 ## Verificação pós-deploy
 
 - `curl https://<containerAppFqdn>/actuator/health` deve responder `{"status":"UP"}`.
-- `curl https://<functionAppName>.azurewebsites.net/api/health` deve responder 200 (função HTTP do Serviço B).
+- O Serviço B não tem endpoint HTTP — verificar as 2 funções (`RelatorioAgendado` e `FeedbackCritico`) pela aba "Functions" do portal do Function App (status "Enabled" e execuções recentes sem erro) e pelos logs no Application Insights.
 - Logs do Container App e do Function App no Application Insights (`appi-edufeedback-<ambiente>`) — confirmar ausência de erros na inicialização.
 - Confirmar que o Container App consegue conectar no PostgreSQL Flexible Server (verificar firewall rules — pode ser necessário liberar o IP de saída do Container App além da regra `AllowAzureServices` já criada pelo Bicep).
 - Enviar um `POST /avaliação` de teste (nota ≤ 3) e confirmar que a fila `notificacoes-criticas` recebeu mensagem e que o e-mail chegou via Azure Communication Services.
-- Rodar a coleção Postman (`postman/edu-feedback.postman_collection.json`) contra as URLs reais publicadas.
-- Verificar as "revisions" do Container App (`az containerapp revision list`) e o status de execução das 4 funções no portal do Function App.
+- Rodar a coleção Postman (`postman/edu-feedback.postman_collection.json`) contra a URL real publicada do Serviço A.
+- Verificar as "revisions" do Container App (`az containerapp revision list`) e o status de execução das 2 funções no portal do Function App.
 
 ## Rollback
 
@@ -90,4 +90,4 @@ Após o provisionamento inicial, os deploys seguintes do código (imagem do back
 
 - Azure Container Apps para Java: https://learn.microsoft.com/azure/container-apps/java-overview
 - GitHub Actions com OIDC na Azure: https://docs.github.com/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-azure
-- Quarkus em Azure Functions: https://quarkus.io/guides/azure-functions-http
+- Azure Functions com Java (modelo de programação): https://learn.microsoft.com/azure/azure-functions/functions-reference-java

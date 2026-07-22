@@ -15,8 +15,9 @@ import java.util.Map;
  * por e-mail quando o Serviço A publica uma avaliação crítica (nota <= limite)
  * na fila "notificacoes-criticas".
  *
- * Não roda dentro do CDI do Quarkus (ver ADR-004 em docs/DECISIONS.md) —
- * usa JdbcRelatorioDao apenas para buscar os e-mails dos administradores.
+ * Uma das 2 funções serverless do Serviço B (ver ADR-005 em docs/DECISIONS.md) —
+ * sem framework de aplicação, usa JdbcRelatorioDao apenas para buscar os e-mails
+ * dos administradores.
  */
 public class FeedbackCriticoFunction {
 

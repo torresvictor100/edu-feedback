@@ -15,9 +15,9 @@ Este projeto é a resposta ao Tech Challenge Fase 4 (FIAP PosTech): plataforma d
 | Serviço | Framework | Responsabilidade | Deploy |
 |---|---|---|---|
 | **Serviço A — API principal** | Spring Boot 3 | Login admin (JWT), recebimento de feedback, consulta de relatórios prontos | Azure Container Apps |
-| **Serviço B — Funções serverless** | Quarkus 3 | Geração agendada de relatório, solicitação sob demanda, processamento assíncrono, notificação de feedback crítico | Azure Functions |
+| **Serviço B — Funções serverless** | Azure Functions Java Worker (sem framework de aplicação) | Geração agendada de relatório, notificação de feedback crítico | Azure Functions |
 
-Os dois serviços compartilham o mesmo banco PostgreSQL.
+Os dois serviços compartilham o mesmo banco PostgreSQL. O Serviço B tem exatamente **2 funções**, cada uma com um único trigger e uma única responsabilidade (ver ADR-005 em `DECISIONS.md`) — mapeando direto nas duas automações que o enunciado do desafio pede: "o envio de notificações e a geração de relatórios".
 
 ---
 
@@ -38,28 +38,28 @@ Os dois serviços compartilham o mesmo banco PostgreSQL.
 
 | Campo | Valor |
 |---|---|
-| **Framework** | Quarkus |
+| **Framework** | Nenhum (Azure Functions Java Worker puro — `azure-functions-java-library`) |
 | **Linguagem** | Java |
-| **Versão** | Quarkus 3.x / Java 21 |
-| **Build tool** | Maven 3.9.x |
+| **Versão** | Java 21 |
+| **Build tool** | Maven 3.9.x (`azure-functions-maven-plugin`) |
 
-**Por que esta escolha:** startup ultrarrápido (JVM mode neste projeto; native/GraalVM documentado como evolução futura) e baixo consumo de memória — reduz cold start e custo em Azure Functions, que é cobrado por execução.
+**Por que esta escolha:** as 2 funções aprovadas (timer e queue trigger) não precisam de HTTP, CDI, injeção de dependência ou ORM reativo — só rodar uma lógica de negócio simples com acesso a Postgres via JDBC e envio de e-mail via SDK do Azure. Um framework de aplicação completo (Quarkus, Spring) seria peso sem benefício real aqui; isso foi decidido na ADR-005 em `DECISIONS.md`, após uma versão anterior (ADR-004, substituída) ter avaliado — e descartado — um desenho híbrido Quarkus + Azure Functions Java Worker que existia só por causa de uma função HTTP que foi removida.
 
-**Nota de empacotamento (importante para quem for evoluir este projeto):** a extensão oficial `quarkus-azure-functions-http` só suporta função com **HTTP trigger** (ela expõe toda a API REST do Quarkus atrás de uma única function HTTP). Por isso, dentro do módulo `functions/`:
-- a função de **solicitação sob demanda** (HTTP trigger) usa Quarkus de verdade (RESTEasy Reactive + Panache + CDI), via `quarkus-azure-functions-http`;
-- as funções de **timer**, **fila** e **notificação por feedback crítico** usam o modelo padrão do Azure Functions Java Worker (`azure-functions-java-library`, anotações `@FunctionName`/`@TimerTrigger`/`@QueueTrigger`) no mesmo módulo Maven, com acesso ao Postgres via JDBC simples (sem CDI/Panache, pois essas funções não rodam dentro do container ArC do Quarkus). Isso é documentado como ADR-004 em `DECISIONS.md`.
+**As 2 funções (responsabilidade única cada):**
+1. `FeedbackCriticoFunction` — Queue Trigger (`notificacoes-criticas`): só envia o e-mail de alerta de feedback crítico.
+2. `RelatorioAgendadoFunction` — Timer Trigger (`RELATORIO_AGENDADO_CRON`): só calcula e persiste o relatório periódico.
 
 **Regras obrigatórias (ambos os serviços):**
 - Organizar por módulo de domínio, não por camada técnica.
-- Controller/Resource: recebe HTTP, valida entrada, delega ao Service.
+- Controller (Serviço A) / classe `@FunctionName` (Serviço B): recebe o gatilho, valida entrada, delega a lógica de negócio.
 - Migrations Flyway pertencem exclusivamente ao Serviço A (dono do schema); o Serviço B só lê/escreve nas tabelas já migradas, nunca cria ou altera schema.
-- Segredos somente em `.env` ou variável de ambiente / Key Vault. Nunca em `application.properties` commitado.
+- Segredos somente em `.env` ou variável de ambiente / Key Vault. Nunca versionados.
 - Testes de integração usam Testcontainers (Postgres) nos dois serviços.
 
 **Material de referência:**
 - **REST** — controllers Spring (`/home/joao/dev/skils/rubro-spec/pdf/APIs RESTful /CURSO-COMPLETO-APIS-RESTFUL.md`)
-- **QUARKUS** — resources e functions Quarkus (`/home/joao/dev/skils/rubro-spec/pdf/ Quarkus/CURSO-COMPLETO-QUARKUS.md`)
 - **SERVERLESS** — padrões de função única responsabilidade, event-driven (`/home/joao/dev/skils/rubro-spec/pdf/Serverless Computing/CURSO-COMPLETO-SERVERLESS.md`)
+- **AZURE** — configuração do Azure Functions (`/home/joao/dev/skils/rubro-spec/pdf/Deploy em Azure/CURSO-COMPLETO-DEPLOY-AZURE.md`)
 
 ---
 
@@ -99,8 +99,8 @@ Os dois serviços compartilham o mesmo banco PostgreSQL.
 **Regras obrigatórias:**
 - `POST /avaliação` é público, sem autenticação — contrato do enunciado do desafio.
 - Login (`POST /auth/login`) e consulta de relatório (`GET /relatorios/{id}`) exigem `ADMIN` autenticado no Serviço A.
-- A função HTTP de solicitação de relatório sob demanda (Serviço B) valida o mesmo token JWT (papel `ADMIN`) antes de enfileirar o pedido.
-- Segredo `JWT_SECRET` nunca versionado; mesmo valor configurado nos dois serviços via Key Vault/variável de ambiente.
+- O Serviço B não expõe nenhum endpoint HTTP e não valida JWT — as 2 funções são disparadas por timer e por fila, nunca por requisição direta de um cliente.
+- Segredo `JWT_SECRET` nunca versionado; usado apenas pelo Serviço A.
 - Senhas de administrador com hash BCrypt.
 
 **Material de referência:**
@@ -113,11 +113,11 @@ Os dois serviços compartilham o mesmo banco PostgreSQL.
 | Estilo | Tecnologia | Quando usar |
 |---|---|---|
 | REST | Spring MVC (Serviço A) | Login, recebimento de feedback, consulta de relatório |
-| REST | Quarkus RESTEasy Reactive (Serviço B, função HTTP) | Solicitação de relatório sob demanda |
+
+O Serviço B não expõe nenhuma API — as 2 funções são disparadas por timer e por fila.
 
 **Material de referência:**
 - ID `REST`
-- ID `QUARKUS`
 
 ---
 
@@ -139,10 +139,10 @@ Não aplicável neste projeto — o enunciado do desafio define apenas contratos
 
 **Componentes de infraestrutura compartilhados:**
 - Azure Database for PostgreSQL — Flexible Server (banco único, acessado pelos dois serviços).
-- Azure Storage Account — duas filas: `solicitacoes-relatorio` e `notificacoes-criticas`.
-- Azure Communication Services (Email) — envio das notificações e do aviso de relatório pronto.
+- Azure Storage Account — fila `notificacoes-criticas`.
+- Azure Communication Services (Email) — envio da notificação de feedback crítico.
 
-**Por que esta escolha:** Container Apps é gerenciado, sem configuração de Kubernetes, com escala automática — adequado para uma API sempre ativa com login. Functions é serverless por definição, cobrado por execução — atende à exigência obrigatória do desafio e é ideal para cargas esporádicas (timer semanal, picos de solicitação sob demanda).
+**Por que esta escolha:** Container Apps é gerenciado, sem configuração de Kubernetes, com escala automática — adequado para uma API sempre ativa com login. Functions é serverless por definição, cobrado por execução — atende à exigência obrigatória do desafio e é ideal para cargas esporádicas (timer periódico, picos de feedback crítico).
 
 **Regras obrigatórias:**
 - Containers com usuário não-root e build multistage.
@@ -158,14 +158,13 @@ Não aplicável neste projeto — o enunciado do desafio define apenas contratos
 
 ## 7. Mensageria Assíncrona
 
-Duas filas do Azure Storage Queue coordenam o trabalho assíncrono exigido pelo produto:
+Uma fila do Azure Storage Queue desacopla o Serviço A do Serviço B:
 
 | Fila | Produtor | Consumidor | Caso de uso |
 |---|---|---|---|
-| `solicitacoes-relatorio` | Função HTTP (Serviço B) | Função Queue Trigger (Serviço B) | Admin pede relatório sob demanda; geração acontece em segundo plano porque pode demorar. |
-| `notificacoes-criticas` | Serviço A, ao salvar avaliação com nota ≤ 3 | Função Queue Trigger (Serviço B) | Desacopla o recebimento do feedback do envio da notificação por e-mail. |
+| `notificacoes-criticas` | Serviço A, ao salvar avaliação com nota ≤ 3 | `FeedbackCriticoFunction` (Queue Trigger, Serviço B) | Desacopla o recebimento do feedback do envio da notificação por e-mail. |
 
-Não é Kafka nem RabbitMQ — não há material de curso específico para Azure Storage Queue; seguir a documentação oficial do Azure (`ID SERVERLESS` cobre os padrões event-driven equivalentes: fan-out, processamento assíncrono).
+Não é Kafka nem RabbitMQ — não há material de curso específico para Azure Storage Queue; seguir a documentação oficial do Azure (`ID SERVERLESS` cobre os padrões event-driven equivalentes).
 
 ---
 
@@ -184,8 +183,8 @@ Projeto de porte pequeno — sem microsserviços em cadeia nem chamadas síncron
 |---|---|
 | Unitário (Serviço A) | JUnit 5, Mockito |
 | Integração (Serviço A) | Spring Boot Test, MockMvc, Testcontainers (Postgres) |
-| Unitário (Serviço B) | JUnit 5 |
-| Integração (Serviço B) | Quarkus Test (`@QuarkusTest`), Testcontainers (Postgres) para a função HTTP |
+| Unitário (Serviço B) | JUnit 5, AssertJ (ex.: serialização do relatório) |
+| Integração (Serviço B) | JUnit 5 + Testcontainers (Postgres) direto contra `JdbcRelatorioDao` |
 
 **Abordagem:** Testes escritos em paralelo ao código. Unitários para lógica de negócio (limite de nota crítica, cálculo de médias), integração para os endpoints e para o acesso ao banco compartilhado.
 
@@ -198,8 +197,8 @@ Projeto de porte pequeno — sem microsserviços em cadeia nem chamadas síncron
 
 - Application Insights conectado aos dois serviços (Container App e Function App) via connection string em variável de ambiente.
 - Serviço A expõe Actuator (`/actuator/health`, `/actuator/metrics`) usado como health check do Container App.
-- Serviço B expõe `/health` (SmallRye Health) na função HTTP; funções não-HTTP são observadas via logs estruturados e métricas nativas do Function App no Azure Monitor.
-- Alertas mínimos: falha de execução de função (qualquer uma das 4), tamanho da fila `notificacoes-criticas` acima do esperado (indício de falha no consumidor), tempo de resposta acima do limite no Container App.
+- Serviço B não tem endpoint HTTP — as 2 funções são observadas via logs estruturados (`context.getLogger()`) e métricas nativas do Function App no Azure Monitor.
+- Alertas mínimos: falha de execução de qualquer uma das 2 funções, tamanho da fila `notificacoes-criticas` acima do esperado (indício de falha no consumidor), tempo de resposta acima do limite no Container App.
 
 **Material de referência:**
 - ID `AZURE`
@@ -240,6 +239,8 @@ Projeto de porte pequeno — sem microsserviços em cadeia nem chamadas síncron
 - GraphQL e gRPC (usando REST).
 - Kafka / RabbitMQ (usando Azure Storage Queue, suficiente para o volume esperado).
 - MongoDB / Cassandra (usando apenas PostgreSQL).
+- Quarkus / qualquer framework de aplicação no Serviço B (ver ADR-005 — descartado após a redução a 2 funções sem HTTP).
+- Solicitação de relatório sob demanda como função serverless (ver ADR-005 — removida; se reintroduzida, deve ser um endpoint comum do Serviço A).
 - Frontend/painel visual (fora do escopo do enunciado; pode ser adicionado depois como novo módulo).
 - Login social / OAuth externo (JWT próprio, sem provedor de identidade externo).
 - IA integrada (não faz parte deste desafio).
@@ -261,11 +262,9 @@ Leia estes materiais **antes** de implementar a tecnologia correspondente:
 - **CLOUD**: `/home/joao/dev/skils/rubro-spec/pdf/Fundamentos de Cloud Computing/CURSO-COMPLETO-CLOUD-COMPUTING.md`
   → Ler ao decidir modelo de hospedagem e segurança/governança de acesso.
 - **SERVERLESS**: `/home/joao/dev/skils/rubro-spec/pdf/Serverless Computing/CURSO-COMPLETO-SERVERLESS.md`
-  → Ler antes de implementar qualquer uma das 4 funções.
+  → Ler antes de implementar qualquer uma das 2 funções.
 - **REST**: `/home/joao/dev/skils/rubro-spec/pdf/APIs RESTful /CURSO-COMPLETO-APIS-RESTFUL.md`
   → Ler ao criar controllers do Serviço A.
-- **QUARKUS**: `/home/joao/dev/skils/rubro-spec/pdf/ Quarkus/CURSO-COMPLETO-QUARKUS.md`
-  → Ler antes de qualquer código Quarkus do Serviço B.
 - **JPA-NOSQL**: `/home/joao/dev/skils/rubro-spec/pdf/Spring Data JPA SQL e NoSQL /CURSO-COMPLETO-SPRING-DATA-JPA.md`
   → Ler ao criar entidades JPA.
 - **MODELAGEM-BD**: `/home/joao/dev/skils/rubro-spec/pdf/Modelagem de banco de dados /CURSO-COMPLETO-MODELAGEM-BD.md`
