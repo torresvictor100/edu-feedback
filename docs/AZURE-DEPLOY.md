@@ -14,7 +14,7 @@ Este runbook prepara a primeira publicação de `edu-feedback` sem armazenar cre
 | Container Apps Environment + Container App | `cae-`/`app-edufeedback-<ambiente>` | Deploy do Serviço A (API) |
 | Function App (Consumption, Linux, Java 21) + App Service Plan | `func-`/`asp-edufeedback-<ambiente>` | Deploy do Serviço B (2 funções: timer + queue) |
 | Application Insights + Log Analytics | `appi-`/`log-edufeedback-<ambiente>` | Observabilidade dos dois serviços |
-| Key Vault + 2 segredos | `kv-edufeedback-<ambiente>` | Guarda `postgres-admin-password` e `jwt-secret` (RBAC habilitado) |
+| Key Vault + 3 segredos | `kv-edufeedback-<ambiente>` | Guarda `postgres-admin-password`, `jwt-secret` e `internal-trigger-secret` (RBAC habilitado) |
 | Azure Communication Services | `acs-edufeedback-<ambiente>` | Envio de e-mail |
 | Action Group + 2 Metric Alerts | `ag-`/`alert-excecoes-`/`alert-postgres-cpu-edufeedback-<ambiente>` | Alerta por e-mail em exceções (App Insights) e CPU alta do Postgres |
 
@@ -22,9 +22,9 @@ Região parametrizada (`location`, padrão `brazilsouth`). Ambiente (`dev`/`stag
 
 **Governança de acesso (RBAC real, não só documentado):** Container App e Function App recebem identidade gerenciada (`SystemAssigned`) e o template concede exatamente as roles que cada uma precisa — nada mais:
 - Container App → `AcrPull` no Container Registry + `Key Vault Secrets User` no Key Vault (lê `postgres-admin-password` e `jwt-secret` via referência nativa, nunca em variável de ambiente em texto puro).
-- Function App → `Key Vault Secrets User` no Key Vault (lê `postgres-admin-password`) + `Storage Queue Data Contributor` na Storage Account (acesso à fila `notificacoes-criticas`).
+- Function App → `Key Vault Secrets User` no Key Vault (lê `postgres-admin-password` e `internal-trigger-secret`) + `Storage Queue Data Contributor` na Storage Account (acesso à fila `notificacoes-criticas`).
 
-Nenhuma credencial é passada como texto puro para o Container App — os dois segredos (`postgres-password`, `jwt-secret`) são referências ao Key Vault (`keyVaultUrl` + identidade gerenciada). O Function App usa a sintaxe `@Microsoft.KeyVault(SecretUri=...)` no app setting `POSTGRES_PASSWORD`.
+Nenhuma credencial é passada como texto puro para o Container App — os dois segredos (`postgres-password`, `jwt-secret`) são referências ao Key Vault (`keyVaultUrl` + identidade gerenciada). O Function App usa a sintaxe `@Microsoft.KeyVault(SecretUri=...)` nos app settings `POSTGRES_PASSWORD` e `INTERNAL_TRIGGER_SECRET`.
 
 ## O que já está automatizado
 
@@ -41,7 +41,7 @@ Nenhuma credencial é passada como texto puro para o Container App — os dois s
 4. Configurar no GitHub (Settings → Environments → `production`):
    - Secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_ACR_NAME`, `AZURE_RESOURCE_GROUP`.
 5. Revisar nomes, região, SKUs e o custo estimado dos recursos em `main.bicep` antes de qualquer `az deployment group create`.
-6. Gerar valores reais para `postgresAdminPassword` e `jwtSecret` (nunca reutilizar os valores de exemplo de `.env.example` ou de `main.parameters.example.json`), e definir `alertNotificationEmail` com o e-mail que deve receber os alertas.
+6. Gerar valores reais para `postgresAdminPassword`, `jwtSecret` e `internalTriggerSecret` (nunca reutilizar os valores de exemplo de `.env.example` ou de `main.parameters.example.json`), e definir `alertNotificationEmail` com o e-mail que deve receber os alertas.
 7. Após o primeiro deploy, trocar a senha do admin seed (`admin@edufeedback.local`) ou remover o seed e cadastrar o admin real.
 8. Se o Container App ou o Function App falharem ao ler o Key Vault logo após o primeiro deploy (a role de acesso pode levar alguns minutos para se propagar), reiniciar a revision do Container App ou reiniciar o Function App.
 9. Aprovar explicitamente o primeiro deploy em produção.
@@ -60,7 +60,8 @@ az group create --name rg-edu-feedback --location brazilsouth
 
 # 3. Copiar e preencher os parâmetros reais (nunca commitar o arquivo preenchido)
 cp infra/azure/main.parameters.example.json infra/azure/main.parameters.json
-# edite infra/azure/main.parameters.json com valores reais de postgresAdminPassword, jwtSecret e alertNotificationEmail
+# edite infra/azure/main.parameters.json com valores reais de postgresAdminPassword, jwtSecret,
+# internalTriggerSecret e alertNotificationEmail
 
 # 4. Validar o template (dry-run)
 az deployment group validate \
@@ -80,7 +81,7 @@ Após o provisionamento inicial, os deploys seguintes do código (imagem do back
 ## Verificação pós-deploy
 
 - `curl https://<containerAppFqdn>/actuator/health` deve responder `{"status":"UP"}`.
-- O Serviço B não tem endpoint HTTP — verificar as 2 funções (`RelatorioAgendado` e `FeedbackCritico`) pela aba "Functions" do portal do Function App (status "Enabled" e execuções recentes sem erro) e pelos logs no Application Insights.
+- O Serviço B não expõe endpoint HTTP público — os endpoints `/internal/*` do Quarkus só respondem a quem tiver `X-Internal-Secret` correto (`curl -X POST https://<functionAppName>.azurewebsites.net/api/internal/relatorio-agendado -H "X-Internal-Secret: <valor>"` deve responder 200; sem o cabeçalho, 401). Verificar as 2 funções (`RelatorioAgendado` e `FeedbackCritico`) pela aba "Functions" do portal do Function App (status "Enabled" e execuções recentes sem erro) e pelos logs no Application Insights.
 - Logs do Container App e do Function App no Application Insights (`appi-edufeedback-<ambiente>`) — confirmar ausência de erros na inicialização.
 - Confirmar que o Container App consegue conectar no PostgreSQL Flexible Server (verificar firewall rules — pode ser necessário liberar o IP de saída do Container App além da regra `AllowAzureServices` já criada pelo Bicep).
 - Enviar um `POST /avaliação` de teste (nota ≤ 3) e confirmar que a fila `notificacoes-criticas` recebeu mensagem e que o e-mail chegou via Azure Communication Services.

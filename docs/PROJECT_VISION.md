@@ -4,7 +4,7 @@
 
 O EduFeedback é uma plataforma para coletar e analisar o feedback de estudantes sobre as aulas de um curso on-line. O objetivo central é dar aos administradores visibilidade rápida sobre a satisfação dos alunos, sem depender de análise manual.
 
-O sistema roda hospedado em nuvem (Microsoft Azure), usando funções serverless para automatizar três tarefas: identificar feedbacks críticos e notificar os administradores, gerar relatórios periódicos de satisfação e processar sob demanda relatórios solicitados pelo administrador.
+O sistema roda hospedado em nuvem (Microsoft Azure), usando funções serverless para automatizar duas tarefas: identificar feedbacks críticos e notificar os administradores, e gerar relatórios periódicos de satisfação.
 
 ## Problema que resolve
 
@@ -18,7 +18,7 @@ Estudantes (avaliam aulas) e administradores/coordenação (analisam relatórios
 
 ### Uma responsabilidade por módulo
 
-Cada módulo resolve um problema específico e possui fronteiras claras. O crescimento do projeto não deve transformar todos os domínios em uma única área acoplada. Isso vale com ainda mais força para as funções serverless: cada uma resolve exatamente um problema (notificar, agendar relatório, receber solicitação, processar solicitação).
+Cada módulo resolve um problema específico e possui fronteiras claras. O crescimento do projeto não deve transformar todos os domínios em uma única área acoplada. Isso vale com ainda mais força para as funções serverless: cada uma resolve exatamente um problema (notificar feedback crítico, gerar relatório agendado).
 
 ### Aprovação antes da implementação
 

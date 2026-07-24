@@ -16,7 +16,7 @@ Implementar demandas de código com escopo controlado, aprovação prévia e pre
 0. Checar a branch atual (`git branch --show-current`). Se existir uma branch `develop` e o HEAD não estiver nela, avisar o usuário e pedir confirmação para trocar antes de continuar — os documentos abaixo (`AGENTS.md`, `docs/`, `skills/`) só existem em `develop`; a branch `main` é a versão pública, sem eles.
 1. Ler `../../AGENTS.md`.
 2. Ler `../../docs/PROJECT_VISION.md` e `../../docs/ARCHITECTURE.md`.
-3. Ler `../../docs/DECISIONS.md` (em especial ADR-005, sobre a redução do Serviço B a 2 funções sem framework de aplicação).
+3. Ler `../../docs/DECISIONS.md` (em especial ADR-005 — redução do Serviço B a 2 funções — e ADR-006 — Quarkus via gatilho nativo fino + endpoint interno).
 4. Para nova feature ou módulo, ler `../../docs/NEW_MODULE_GUIDE.md`.
 5. Consultar `../../docs/MODULES.md` para evitar duplicidade.
 6. Se a demanda envolver deploy ou infraestrutura, ler também `../../docs/AZURE-DEPLOY.md` e `../../docs/PRODUCTION-READINESS.md`.
@@ -40,11 +40,13 @@ Se a conversa já contiver uma proposta aceita, executar somente o escopo aceito
 
 Dois serviços Java 21 / Maven:
 - **Serviço A** (`backend/`) — Spring Boot 3.3.x, Spring Data JPA, Flyway, PostgreSQL 16, Spring Security + `jjwt` para JWT.
-- **Serviço B** (`functions/`) — Azure Functions Java Worker puro (`azure-functions-java-library`, anotações `@FunctionName`), sem framework de aplicação. Exatamente 2 funções: `RelatorioAgendadoFunction` (Timer) e `FeedbackCriticoFunction` (Queue). Acesso ao Postgres via JDBC simples (`shared/JdbcRelatorioDao`).
+- **Serviço B** (`functions/`) — Quarkus 3.x + Azure Functions Java Worker puro combinados (ver ADR-006). Exatamente 2 funções, cada uma com duas partes:
+  - **Gatilho nativo fino** (`azure-functions-java-library`, anotações `@FunctionName`, sem CDI): `RelatorioAgendadoTrigger` (Timer) e `FeedbackCriticoTrigger` (Queue). Só repassam a chamada via HTTP (`InternalHttpCaller`) para o endpoint interno.
+  - **Endpoint interno Quarkus** (`/internal/...`, CDI, Panache): `RelatorioAgendadoResource`+`RelatorioService` e `FeedbackCriticoResource`+`EmailService`. Concentram toda a lógica de negócio. Protegidos por `InternalSecretValidator` (`X-Internal-Secret`).
 
 Mensageria: Azure Storage Queue (`notificacoes-criticas`). E-mail: Azure Communication Services. Deploy: Serviço A em Azure Container Apps, Serviço B em Azure Functions.
 
-Não adicionar uma 3ª função nem um endpoint HTTP no Serviço B sem nova ADR aprovada — a redução a 2 funções foi decisão explícita do usuário (ADR-005), especificamente para manter responsabilidade única sem ambiguidade em cada componente.
+Não adicionar uma 3ª função, nem expor um endpoint `/internal/*` como API pública, nem reintroduzir a solicitação de relatório sob demanda como função serverless sem nova ADR aprovada — a redução a 2 funções foi decisão explícita do usuário (ADR-005), mantida na ADR-006, especificamente para manter responsabilidade única sem ambiguidade em cada componente.
 
 Mudanças de stack exigem nova ADR aprovada em `../../docs/DECISIONS.md`.
 
@@ -52,12 +54,13 @@ Mudanças de stack exigem nova ADR aprovada em `../../docs/DECISIONS.md`.
 
 ## Convenções de código
 
-- Organizar por módulo de domínio (`auth`, `avaliacao`, `relatorio` no Serviço A; `timer`, `notificacao` no Serviço B), nunca por camada técnica pura.
+- Organizar por módulo de domínio (`auth`, `avaliacao`, `relatorio` no Serviço A; `timer`, `notificacao`, `relatorio`, `avaliacao`, `admin` no Serviço B), nunca por camada técnica pura.
 - Controller (Serviço A): recebe HTTP, valida entrada, delega ao Service. Nunca lógica de negócio no controller.
-- Classe `@FunctionName` (Serviço B): recebe o gatilho, delega a lógica para `shared/`. Nunca lógica de negócio direto na classe da função.
-- Migrations Flyway são exclusivas do Serviço A; o Serviço B nunca cria/altera schema.
+- Classe `@FunctionName` (Serviço B): recebe o gatilho, só repassa via HTTP para o endpoint interno — nunca lógica de negócio no gatilho nativo.
+- Resource Quarkus `/internal/*` (Serviço B): sempre valida `InternalSecretValidator` antes de qualquer coisa, depois delega ao Service (CDI). Nunca lógica de negócio direto no resource.
+- Migrations Flyway são exclusivas do Serviço A; o Serviço B nunca cria/altera schema (Panache com `database.generation=none`).
 - Segredos somente em `.env`/variável de ambiente/Key Vault, nunca versionados.
-- Testes proporcionais ao risco: MockMvc + Testcontainers para o Serviço A; testes unitários (AssertJ) para lógica pura e Testcontainers direto contra `JdbcRelatorioDao` para o que toca banco no Serviço B.
+- Testes proporcionais ao risco: MockMvc + Testcontainers para o Serviço A; `@QuarkusTest` + RestAssured + Dev Services (Postgres) para os endpoints internos do Serviço B; testes unitários (AssertJ) para lógica pura.
 - Português do Brasil em documentação e textos de produto; nomes técnicos de código em inglês quando a convenção da stack favorecer.
 
 ---
@@ -74,9 +77,13 @@ Nenhuma regra adicional além das descritas acima.
 
 > Adicione uma subseção aqui para cada módulo que tiver gotchas, dependências não óbvias ou padrões específicos que o agente precisa conhecer antes de editar.
 
-### Funções Timer e Queue (Serviço B)
+### Gatilhos nativos (RelatorioAgendadoTrigger, FeedbackCriticoTrigger)
 
-Não há nenhum framework de aplicação nesse módulo (ver ADR-005) — nada de `@Inject`, CDI ou ORM. Use `shared/JdbcRelatorioDao` (ou crie um DAO JDBC simples equivalente) para acessar o Postgres, e `shared/EmailSender` para envio de e-mail.
+Essas classes **não têm CDI** — não tente `@Inject` nelas. Elas só existem para disparar no trigger certo e chamar `InternalHttpCaller.post(...)` com o segredo interno. Toda lógica de negócio nova vai no endpoint Quarkus correspondente, nunca aqui.
+
+### Endpoints internos (RelatorioAgendadoResource, FeedbackCriticoResource)
+
+São Quarkus de verdade (CDI, Panache) — mas ficam expostos publicamente pelo `quarkus-azure-functions-http` do mesmo jeito que qualquer rota Quarkus. **Todo novo endpoint em `/internal/*` precisa injetar `InternalSecretValidator` e checar `@HeaderParam("X-Internal-Secret")` antes de qualquer lógica** — não existe outro mecanismo de proteção nessas rotas.
 
 ---
 

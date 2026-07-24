@@ -15,7 +15,7 @@ O projeto precisará atender ao requisito obrigatório do Tech Challenge Fase 4:
 
 ### Decisão
 
-Arquitetura de dois serviços: Java 21 + Spring Boot 3 + Maven + Spring Data JPA + Flyway + PostgreSQL para a API principal (login, feedback, consulta de relatório); Java 21 + Azure Functions Java Worker puro (sem framework de aplicação) + Maven para as 2 funções serverless (timer de relatório agendado, queue de notificação crítica — ver ADR-005), compartilhando o mesmo banco PostgreSQL.
+Arquitetura de dois serviços: Java 21 + Spring Boot 3 + Maven + Spring Data JPA + Flyway + PostgreSQL para a API principal (login, feedback, consulta de relatório); Java 21 + Maven para as 2 funções serverless (timer de relatório agendado, queue de notificação crítica), compartilhando o mesmo banco PostgreSQL. O Serviço B combina gatilhos nativos finos com Quarkus para a lógica de negócio — ver ADR-006 (substitui a ADR-005).
 
 ### Consequências
 
@@ -100,3 +100,41 @@ Como nenhuma das duas funções precisa de HTTP, CDI ou ORM reativo, o módulo `
 - `infra/azure/main.bicep` não provisiona mais essa fila.
 - O módulo `functions/` fica mais simples de explicar na avaliação: 2 componentes, 2 responsabilidades, sem mistura de estilos de código.
 - Se o admin precisar de relatórios sob demanda no futuro, a forma mais simples de reintroduzir isso é um endpoint comum (síncrono) no Serviço A — não como função serverless — para não reabrir a mistura de responsabilidades identificada aqui.
+
+**Nota:** esta ADR foi parcialmente substituída pela ADR-006 — o Serviço B voltou a usar Quarkus, mas a decisão de ter exatamente 2 funções (timer + queue), cada uma com responsabilidade única, continua valendo.
+
+---
+
+## ADR-006 — Quarkus de volta no Serviço B, via gatilho nativo fino + endpoint interno
+
+- Data: 2026-07-24
+- Estado: aceita
+
+### Contexto
+
+Objetivo de aprendizado do usuário: praticar Quarkus (conteúdo visto no curso) nas funções serverless, com deploy real na Azure. A restrição técnica que motivou a ADR-005 continua verdadeira: a extensão oficial `quarkus-azure-functions-http` só sabe fazer **HTTP trigger** — não existe suporte oficial do Quarkus para Timer trigger ou Queue trigger com CDI. Não dá para simplesmente "voltar a usar Quarkus" nas 2 funções como elas eram antes (Timer/Queue nativos) sem violar essa limitação.
+
+A alternativa de tirar essas 2 responsabilidades do Azure Functions e rodar como serviço Quarkus sempre ativo (Container App) foi descartada: isso deixaria de ser serverless, violando a regra obrigatória do enunciado ("Deve, obrigatoriamente, implementar serverless").
+
+### Decisão
+
+Cada uma das 2 funções passa a ter duas partes:
+
+1. **Gatilho nativo fino** — classe `@FunctionName` do modelo padrão do Azure Functions Java Worker (sem CDI), com uma única responsabilidade: disparar no trigger certo (Timer ou Queue) e repassar a chamada, via HTTP, para um endpoint interno.
+   - `RelatorioAgendadoTrigger` (Timer) → `POST /internal/relatorio-agendado`
+   - `FeedbackCriticoTrigger` (Queue) → `POST /internal/feedback-critico`
+2. **Endpoint interno Quarkus** — recurso RESTEasy Reactive (`@Path("/internal/...")`), exposto via `quarkus-azure-functions-http` (função HTTP única que já existia na versão original do projeto), com toda a lógica de negócio de verdade: CDI (`@ApplicationScoped`), Panache (`AvaliacaoEntity`, `AdminEntity`, `RelatorioEntity`), injeção de dependência.
+   - `RelatorioAgendadoResource` → delega para `RelatorioService` (calcula agregados, persiste o relatório).
+   - `FeedbackCriticoResource` → busca e-mails dos admins via Panache e envia via `EmailService`.
+
+As rotas `/internal/*` ficam protegidas por `InternalSecretValidator`, injetado em cada resource e checado no início do método via `@HeaderParam("X-Internal-Secret")` (comparado com `INTERNAL_TRIGGER_SECRET`) — sem isso, qualquer cliente externo poderia chamá-las diretamente, já que o `quarkus-azure-functions-http` expõe todas as rotas Quarkus atrás do mesmo endpoint HTTP público do Function App. (Uma primeira tentativa usando um `ContainerRequestFilter` JAX-RS global não bloqueava as requisições de forma confiável nos testes — a checagem explícita por endpoint é mais simples e verificadamente funciona.)
+
+A chamada HTTP do gatilho nativo para o endpoint interno usa o hostname do próprio Function App (`WEBSITE_HOSTNAME`, injetado automaticamente pela Azure; `localhost:7071` como padrão local via Core Tools) — é uma chamada de function-to-function dentro do mesmo app, padrão comum quando um Azure Function precisa acionar lógica exposta via HTTP trigger.
+
+### Consequências
+
+- O módulo `functions/` volta a depender do Quarkus (CDI, Panache, RESTEasy Reactive, `quarkus-azure-functions-http`) — igual à primeira versão do projeto, mas agora sem a função de solicitação sob demanda (que segue removida, ADR-005).
+- Continuam sendo exatamente 2 funções serverless no sentido do enunciado (2 gatilhos Azure Functions distintos — Timer e Queue), cada uma com responsabilidade única. A diferença é que agora a maior parte do código de cada uma é Quarkus real, não JDBC bruto.
+- Adiciona uma chamada HTTP interna por execução (latência extra pequena, aceitável para o volume deste projeto) e uma dependência nova: `INTERNAL_TRIGGER_SECRET`, gerenciado como qualquer outro segredo (Key Vault em produção).
+- `JdbcRelatorioDao` e o `EmailSender` sem CDI foram removidos; a lógica equivalente vive em `RelatorioService`/`EmailService` (CDI) e nas entidades Panache.
+- Explicar essa arquitetura (gatilho fino + endpoint interno protegido) é parte do que deve constar no vídeo de demonstração e na documentação da avaliação — é a peça mais não óbvia do projeto.

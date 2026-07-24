@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "EduFeedback",
-    "description": "Coleção de testes manuais do EduFeedback: Serviço A (API principal, Spring Boot). O Serviço B (2 funções serverless: timer de relatório agendado e queue de notificação crítica) não expõe nenhum endpoint HTTP — não é testável via Postman. Para verificar as funções, acompanhe os logs no Application Insights / portal do Function App, ou rode `mvn azure-functions:run` localmente com Azure Functions Core Tools e acione manualmente pelo portal.",
+    "description": "Coleção de testes manuais do EduFeedback: Serviço A (API principal, Spring Boot). O Serviço B (2 funções serverless: timer de relatório agendado e queue de notificação crítica, cada uma com um gatilho nativo + endpoint Quarkus interno) não expõe endpoint HTTP público — os endpoints /internal/* exigem o cabeçalho X-Internal-Secret e não fazem parte desta coleção. Para verificar as funções, acompanhe os logs no Application Insights / portal do Function App, ou rode `mvn quarkus:dev`/`azure-functions:run` localmente.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -98,7 +98,7 @@
                   "const body = pm.response.json();",
                   "pm.test('Urgência CRITICA', () => pm.expect(body.urgencia).to.eql('CRITICA'));",
                   "// Esta requisição enfileira uma notificação em \"notificacoes-criticas\";",
-                  "// FeedbackCriticoFunction (Serviço B) consome e envia o e-mail — verificar nos logs do Function App."
+                  "// FeedbackCriticoTrigger → FeedbackCriticoResource (Serviço B) consomem e enviam o e-mail — verificar nos logs do Function App."
                 ]
               }
             }
@@ -134,6 +134,6 @@
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8080" },
     { "key": "token", "value": "" },
-    { "key": "relatorioId", "value": "", "description": "Preencher com o id gerado por RelatorioAgendadoFunction (Serviço B) — consultar direto na tabela relatorios, já que não há endpoint para listá-los nesta versão." }
+    { "key": "relatorioId", "value": "", "description": "Preencher com o id gerado pela função de relatório agendado (Serviço B) — consultar direto na tabela relatorios, já que não há endpoint para listá-los nesta versão." }
   ]
 }

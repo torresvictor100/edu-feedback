@@ -8,6 +8,7 @@
     "postgresAdminLogin": { "value": "edufeedback_admin" },
     "postgresAdminPassword": { "value": "SUBSTITUA_ANTES_DE_EXECUTAR" },
     "jwtSecret": { "value": "SUBSTITUA_ANTES_DE_EXECUTAR" },
+    "internalTriggerSecret": { "value": "SUBSTITUA_ANTES_DE_EXECUTAR" },
     "alertNotificationEmail": { "value": "SUBSTITUA_ANTES_DE_EXECUTAR" }
   }
 }

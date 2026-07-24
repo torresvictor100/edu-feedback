@@ -10,7 +10,7 @@ Estudantes enviam avaliações de aula (nota de 0 a 10 e descrição) através d
 
 Antes de trabalhar neste repositório:
 
-1. Leia `docs/TECH-SPEC.md` — **primeira leitura obrigatória**. Define todas as tecnologias aprovadas, justificativas e regras do projeto, incluindo a arquitetura de dois serviços (Serviço A Spring Boot / Serviço B Azure Functions Java puro).
+1. Leia `docs/TECH-SPEC.md` — **primeira leitura obrigatória**. Define todas as tecnologias aprovadas, justificativas e regras do projeto, incluindo a arquitetura de dois serviços (Serviço A Spring Boot / Serviço B Quarkus + gatilho nativo fino).
 2. Leia `skills/trabalhar-em-edu-feedback/SKILL.md`.
 3. Leia `docs/PROJECT_VISION.md`.
 4. Leia `docs/ARCHITECTURE.md`.
@@ -38,6 +38,7 @@ Os IDs abaixo referenciam a legenda completa (caminho de arquivo e fase) em `/ho
 | **Segurança no Azure (IAM, RBAC, Key Vault, Managed Identity)** | CLOUD |
 | Criar Dockerfile, configurar imagem, docker-compose.yml | DOCKER |
 | Criar API REST com Spring MVC, Controller, ResponseEntity | REST |
+| Criar resource, CDI ou entidade Panache no Serviço B | QUARKUS |
 | Criar entidades JPA, Repository, migrations Postgres | JPA-NOSQL |
 | Modelar banco de dados, criar schema, índices | MODELAGEM-BD |
 | Configurar Spring Security, JWT | SEGURANCA |
@@ -45,10 +46,11 @@ Os IDs abaixo referenciam a legenda completa (caminho de arquivo e fase) em `/ho
 
 **Regras de infraestrutura:**
 - Toda decisão de infraestrutura usa Microsoft Azure como plataforma (referência primária: ID `AZURE`).
-- Serviço A (Spring Boot) é deployado em Azure Container Apps; Serviço B (Azure Functions Java puro, sem framework de aplicação) em Azure Functions. Nunca inverter essa divisão sem nova ADR aprovada.
-- Serviço B tem exatamente 2 funções (timer + queue), cada uma com responsabilidade única — ver ADR-005 em `docs/DECISIONS.md`. Nunca adicionar um endpoint HTTP nem reintroduzir a solicitação de relatório sob demanda como função serverless sem nova ADR aprovada; se essa funcionalidade voltar, deve ser um endpoint comum do Serviço A.
-- Migrations Flyway são de propriedade exclusiva do Serviço A. O Serviço B nunca cria ou altera schema.
-- Segredos (JWT_SECRET, connection strings) só em Key Vault/variável de ambiente, nunca versionados. `JWT_SECRET` é usado somente pelo Serviço A — o Serviço B não valida JWT.
+- Serviço A (Spring Boot) é deployado em Azure Container Apps; Serviço B (Quarkus + gatilho nativo fino) em Azure Functions. Nunca inverter essa divisão sem nova ADR aprovada.
+- Serviço B tem exatamente 2 funções (timer + queue), cada uma com responsabilidade única — ver ADR-005 e ADR-006 em `docs/DECISIONS.md`. Cada função = gatilho nativo fino (`@FunctionName`, sem CDI) + endpoint interno Quarkus (`/internal/...`, CDI/Panache) que faz o trabalho de verdade. Nunca expor um endpoint interno como API pública, nunca reintroduzir a solicitação de relatório sob demanda como função serverless sem nova ADR aprovada.
+- Endpoints `/internal/*` do Serviço B sempre validam `X-Internal-Secret` via `InternalSecretValidator` antes de qualquer lógica de negócio — são alcançáveis publicamente pelo proxy HTTP do `quarkus-azure-functions-http`, mesmo não sendo pensados para isso.
+- Migrations Flyway são de propriedade exclusiva do Serviço A. O Serviço B nunca cria ou altera schema (`quarkus.hibernate-orm.database.generation=none` em dev/prod).
+- Segredos (JWT_SECRET, INTERNAL_TRIGGER_SECRET, connection strings) só em Key Vault/variável de ambiente, nunca versionados. `JWT_SECRET` é usado somente pelo Serviço A — o Serviço B não valida JWT, usa `INTERNAL_TRIGGER_SECRET` para proteger seus próprios endpoints internos.
 
 **Regra geral:** não implemente de memória. Consulte o material correspondente à tecnologia aprovada e aplique somente convenções compatíveis com a stack registrada em `docs/TECH-SPEC.md`.
 
@@ -94,4 +96,4 @@ Nenhuma regra adicional definida na criação.
 
 ## Estado atual
 
-Projeto criado em 2026-07-22. Escopo inicial implementado: autenticação admin, recebimento de feedback, 2 funções serverless (timer de relatório agendado, queue de notificação crítica), consulta de relatório. Ver `docs/PRODUCTION-READINESS.md` para o estado exato de build/testes e pendências humanas de deploy.
+Projeto criado em 2026-07-22, com o Serviço B revisado em 2026-07-24 para usar Quarkus (ADR-006). Escopo implementado: autenticação admin, recebimento de feedback, 2 funções serverless (timer de relatório agendado, queue de notificação crítica — cada uma com gatilho nativo fino + endpoint interno Quarkus), consulta de relatório. Ver `docs/PRODUCTION-READINESS.md` para o estado exato de build/testes e pendências humanas de deploy.

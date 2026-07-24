@@ -56,9 +56,9 @@ Criar somente o necessário para entregar o comportamento aprovado:
 
 **Serviço A (Spring Boot):** Controller (contrato HTTP + validação Bean Validation) → Service (regra de negócio) → Repository/Entity JPA (persistência) → migration Flyway quando houver nova tabela/coluna → tratamento de erro no `GlobalExceptionHandler` → testes (MockMvc para o controller, Testcontainers quando tocar o banco).
 
-**Serviço B (Quarkus/Functions):**
-- Se for função **HTTP**: Resource Quarkus (RESTEasy Reactive) + entidade Panache + testes com `@QuarkusTest`.
-- Se for função **Timer** ou **Queue**: classe `@FunctionName` no modelo Azure Functions Java Worker, usando `shared/JdbcRelatorioDao` (ou um novo DAO JDBC simples, se o dado for diferente) + testes unitários da lógica de negócio isolada da função.
+**Serviço B (gatilho nativo fino + endpoint interno Quarkus, ver ADR-006):**
+- Gatilho nativo (`@FunctionName`, Timer ou Queue, sem CDI): só dispara e repassa via `InternalHttpCaller` para o endpoint interno. Nenhuma lógica de negócio aqui.
+- Endpoint interno Quarkus (`/internal/...`, RESTEasy Reactive): injeta `InternalSecretValidator` e checa o segredo antes de tudo, depois delega para um Service CDI (Panache para acesso a dados) + testes com `@QuarkusTest`/RestAssured.
 
 Não criar abstrações antecipadas. Se um padrão aparecer em dois módulos, criar o compartilhado só então.
 

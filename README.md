@@ -5,7 +5,7 @@ Plataforma para estudantes avaliarem aulas e administradores acompanharem a sati
 ## Arquitetura em duas partes
 
 - **`backend/`** — API principal (Java 21 + Spring Boot 3): login de administrador (JWT), recebimento de feedback (`POST /avaliação`) e consulta de relatório (`GET /relatorios/{id}`). Deploy: Azure Container Apps.
-- **`functions/`** — 2 funções serverless (Java 21, Azure Functions Java puro, sem framework de aplicação): geração agendada de relatório (timer) e notificação de feedback crítico (queue). Deploy: Azure Functions.
+- **`functions/`** — 2 funções serverless (Java 21 + Quarkus 3): geração agendada de relatório (timer) e notificação de feedback crítico (queue). Cada função combina um gatilho nativo fino (Timer/Queue) com um endpoint Quarkus interno, protegido por segredo compartilhado, que concentra a lógica de negócio (CDI, Panache). Deploy: Azure Functions.
 
 Os dois serviços compartilham o mesmo banco PostgreSQL. Detalhes completos da arquitetura em [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (specs completas só existem na branch `develop`).
 
@@ -44,7 +44,7 @@ cd functions && mvn test
 
 ## Coleção Postman
 
-Importe `postman/edu-feedback.postman_collection.json` e `postman/local.postman_environment.json` no Postman para testar os fluxos manualmente (health check, login, envio de feedback e consulta de relatório). O Serviço B (funções) não tem endpoint HTTP, então não é testável via Postman — acompanhe pelos logs.
+Importe `postman/edu-feedback.postman_collection.json` e `postman/local.postman_environment.json` no Postman para testar os fluxos manualmente (health check, login, envio de feedback e consulta de relatório). O Serviço B não tem endpoint HTTP **público** — os endpoints Quarkus em `/internal/*` só existem para os gatilhos nativos (Timer/Queue) chamarem entre si, protegidos por segredo compartilhado; acompanhe o funcionamento das 2 funções pelos logs.
 
 ## Documentação
 

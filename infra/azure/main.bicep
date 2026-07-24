@@ -1,7 +1,8 @@
 // Infraestrutura como código do EduFeedback.
 // Provisiona: PostgreSQL Flexible Server, Storage Account (fila notificacoes-criticas),
 // Azure Container Registry, Container Apps Environment + Container App (Serviço A),
-// Function App Consumption (Serviço B: 2 funções — timer e queue), Application
+// Function App Consumption (Serviço B: 2 gatilhos nativos — Timer e Queue — que
+// chamam endpoints internos Quarkus no mesmo Function App, ver ADR-006), Application
 // Insights + Log Analytics, Key Vault (com role assignments reais para as duas
 // identidades gerenciadas), Azure Communication Services (e-mail) e alertas de
 // monitoramento (Azure Monitor) com action group de e-mail.
@@ -39,6 +40,10 @@ param postgresAdminPassword string
 @description('Segredo compartilhado para assinatura dos JWT emitidos pelo Serviço A (o Serviço B não usa JWT).')
 @secure()
 param jwtSecret string
+
+@description('Segredo compartilhado só entre os gatilhos nativos (Timer/Queue) e os endpoints internos do Quarkus no Serviço B — nunca exposto fora do próprio Function App.')
+@secure()
+param internalTriggerSecret string
 
 @description('E-mail que recebe os alertas de monitoramento (Application Insights e PostgreSQL).')
 param alertNotificationEmail string
@@ -91,6 +96,12 @@ resource kvSecretJwt 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: keyVault
   name: 'jwt-secret'
   properties: { value: jwtSecret }
+}
+
+resource kvSecretInternalTrigger 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'internal-trigger-secret'
+  properties: { value: internalTriggerSecret }
 }
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
@@ -250,6 +261,10 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
     serverFarmId: functionAppPlan.id
     siteConfig: {
       linuxFxVersion: 'JAVA|21'
+      // WEBSITE_HOSTNAME não precisa ser definido aqui — a Azure injeta essa
+      // variável automaticamente em todo App Service/Function App com o
+      // hostname público do próprio app. Os gatilhos nativos (Timer/Queue)
+      // usam ela para chamar os endpoints internos do Quarkus na mesma app.
       appSettings: [
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'java' }
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
@@ -260,6 +275,7 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
         { name: 'POSTGRES_DB', value: 'edufeedback' }
         { name: 'POSTGRES_USER', value: postgresAdminLogin }
         { name: 'POSTGRES_PASSWORD', value: '@Microsoft.KeyVault(SecretUri=${kvSecretPostgresPassword.properties.secretUri})' }
+        { name: 'INTERNAL_TRIGGER_SECRET', value: '@Microsoft.KeyVault(SecretUri=${kvSecretInternalTrigger.properties.secretUri})' }
         { name: 'RELATORIO_AGENDADO_CRON', value: '0 0 8 * * 1' }
         { name: 'APPINSIGHTS_INSTRUMENTATIONKEY', value: appInsights.properties.InstrumentationKey }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }

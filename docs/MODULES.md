@@ -36,24 +36,24 @@ Seguir o processo definido em `NEW_MODULE_GUIDE.md` antes de adicionar um módul
 
 - ID: `notificacao-critica`
 - Estado: `disponível`
-- Data de inclusão: 2026-07-22
+- Data de inclusão: 2026-07-22 (revisado em 2026-07-24, ADR-006)
 - Categoria: integração
-- Rotas principais: função `FeedbackCriticoFunction` (Queue Trigger, fila `notificacoes-criticas`)
-- Propósito: avisar os administradores por e-mail quando chega um feedback com nota ≤ 3.
+- Rotas principais: `FeedbackCriticoTrigger` (Queue Trigger, fila `notificacoes-criticas`) → `POST /internal/feedback-critico` (Quarkus, `X-Internal-Secret`)
+- Propósito: avisar os administradores por e-mail quando chega um feedback com nota ≤ 3, com descrição, urgência e data de envio.
 - Público: administradores.
-- Responsável pela lógica: módulo `notificacao` no Serviço B (`functions/`).
+- Responsável pela lógica: módulos `notificacao`/`admin`/`shared` no Serviço B (`functions/`) — `FeedbackCriticoResource` + `EmailService` (CDI).
 - Limitações conhecidas: envia para todos os admins cadastrados, sem preferência individual de notificação.
 
 ### Geração de relatório agendado
 
 - ID: `relatorio-agendado`
 - Estado: `disponível`
-- Data de inclusão: 2026-07-22
+- Data de inclusão: 2026-07-22 (revisado em 2026-07-24, ADR-006)
 - Categoria: produto
-- Rotas principais: função `RelatorioAgendadoFunction` (Timer Trigger, periodicidade configurável via `RELATORIO_AGENDADO_CRON`)
-- Propósito: gerar automaticamente um relatório com médias e contagens de avaliações.
+- Rotas principais: `RelatorioAgendadoTrigger` (Timer Trigger, periodicidade configurável via `RELATORIO_AGENDADO_CRON`) → `POST /internal/relatorio-agendado` (Quarkus, `X-Internal-Secret`)
+- Propósito: gerar automaticamente um relatório com médias, contagens por dia/urgência e a lista de avaliações (descrição, urgência, data de envio).
 - Público: administradores.
-- Responsável pela lógica: módulo `timer` no Serviço B (`functions/`).
+- Responsável pela lógica: módulos `relatorio`/`avaliacao`/`shared` no Serviço B (`functions/`) — `RelatorioAgendadoResource` + `RelatorioService` (CDI, Panache).
 - Limitações conhecidas: periodicidade fixa por configuração, não por regra de negócio dinâmica.
 
 ### Consulta de relatório
