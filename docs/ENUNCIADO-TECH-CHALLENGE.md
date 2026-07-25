@@ -87,7 +87,7 @@ Segurança e governança de acesso foram desenhadas via Managed Identity + roles
 
 **O que ainda falta (depende de ação humana, fora do que um agente de IA consegue fazer):**
 - Provisionar a infraestrutura de verdade na Azure (o Bicep nunca foi rodado contra uma assinatura real).
-- Criar o repositório no GitHub e dar push (o enunciado pede repositório aberto).
+- ~~Criar o repositório no GitHub e dar push (o enunciado pede repositório aberto).~~ ✅ Feito: https://github.com/torresvictor100/edu-feedback
 - Configurar a federação OIDC entre GitHub Actions e Azure e rodar o deploy real.
 - Gravar o vídeo de demonstração com o sistema rodando de verdade na nuvem.
 

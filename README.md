@@ -7,7 +7,9 @@ Plataforma para estudantes avaliarem aulas e administradores acompanharem a sati
 - **`backend/`** — API principal (Java 21 + Spring Boot 3): login de administrador (JWT), recebimento de feedback (`POST /avaliação`) e consulta de relatório (`GET /relatorios/{id}`). Deploy: Azure Container Apps.
 - **`functions/`** — 2 funções serverless (Java 21 + Quarkus 3): geração agendada de relatório (timer) e notificação de feedback crítico (queue). Cada função combina um gatilho nativo fino (Timer/Queue) com um endpoint Quarkus interno, protegido por segredo compartilhado, que concentra a lógica de negócio (CDI, Panache). Deploy: Azure Functions.
 
-Os dois serviços compartilham o mesmo banco PostgreSQL. Detalhes completos da arquitetura em [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (specs completas só existem na branch `develop`).
+Os dois serviços compartilham o mesmo banco PostgreSQL. Detalhes completos da arquitetura em [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+Repositório: https://github.com/torresvictor100/edu-feedback
 
 ## Rodando localmente
 
@@ -48,4 +50,4 @@ Importe `postman/edu-feedback.postman_collection.json` e `postman/local.postman_
 
 ## Documentação
 
-Este README fica público. A documentação completa do projeto (especificação técnica, arquitetura, decisões, guia de novos módulos) vive em `docs/` e `AGENTS.md`, disponíveis apenas na branch `develop` deste repositório.
+Este README fica público. A documentação completa do projeto (especificação técnica, arquitetura, decisões, guia de novos módulos) vive em `docs/` e `AGENTS.md`, na branch `main` deste repositório.

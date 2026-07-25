@@ -29,7 +29,7 @@ Este documento cruza o enunciado do desafio com o que já está pronto no reposi
 
 | Artefato | Status | O que falta |
 |---|---|---|
-| Repositório aberto com o código-fonte | 🟡 Git local pronto (branches `main`/`develop`, histórico limpo) | **Falta criar o repositório no GitHub e dar push.** Decidir se fica público (o enunciado pede "repositório aberto"). |
+| Repositório aberto com o código-fonte | 🟢 Publicado no GitHub | https://github.com/torresvictor100/edu-feedback |
 | Vídeo de demonstração (app funcionando, funções serverless ativas, configurações do projeto) | 🔴 **Não existe** | Precisa ser gravado por você depois do deploy real — é ação 100% humana, nenhum agente de IA grava vídeo. Roteiro sugerido na seção 5. |
 
 ## 4. Critérios de avaliação
@@ -96,8 +96,8 @@ Depois do `create`, aceite o e-mail de confirmação do Action Group (chega em `
 
 ### Passo 5 — Configurar o GitHub para deploy automatizado
 
-1. Criar o repositório no GitHub (público, conforme o enunciado pede "repositório aberto").
-2. `git remote add origin <url>` e `git push -u origin main develop`.
+1. ~~Criar o repositório no GitHub (público, conforme o enunciado pede "repositório aberto").~~ ✅ Feito: https://github.com/torresvictor100/edu-feedback
+2. ~~`git remote add origin <url>` e `git push -u origin main`.~~ ✅ Feito (branch única `main`).
 3. Criar a federação OIDC entre GitHub Actions e Azure (App Registration + Federated Credential) — sem client secret.
 4. Configurar em Settings → Environments → `production`: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_ACR_NAME`, `AZURE_RESOURCE_GROUP`.
 5. Rodar o workflow `deploy-azure.yml` (manual ou via push em `main`) para publicar a imagem do Serviço A e o pacote do Serviço B de verdade.
@@ -132,9 +132,9 @@ Roteiro sugerido (o enunciado pede: aplicação em funcionamento, funções serv
 
 ### Passo 9 — Entregar
 
-- Link do repositório GitHub (público).
+- Link do repositório GitHub (público): https://github.com/torresvictor100/edu-feedback
 - Vídeo de demonstração.
-- Conferir que a branch `main` reflete o código público mais recente (rode `git status`/`git log` nas duas branches — se `develop` tiver avançado e `main` não, sincronize os arquivos públicos antes de entregar).
+- Conferir que a branch `main` está com o código mais recente (`git status`/`git log`) antes de entregar.
 
 ---
 
