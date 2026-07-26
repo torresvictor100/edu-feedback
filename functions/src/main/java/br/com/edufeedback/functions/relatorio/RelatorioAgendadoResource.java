@@ -12,9 +12,10 @@ import jakarta.ws.rs.core.Response;
 
 /**
  * Endpoint interno (protegido por {@code InternalSecretValidator}) acionado
- * pelo gatilho Timer nativo {@code RelatorioAgendadoTrigger}. Única
- * responsabilidade: gerar o relatório periódico — toda a lógica de negócio
- * vive em {@link RelatorioService} (CDI, Panache).
+ * pelo Container Apps Job agendado "job-relatorio-agendado" (Schedule trigger,
+ * ver ADR-007 em docs/DECISIONS.md). Única responsabilidade: gerar o
+ * relatório periódico — toda a lógica de negócio vive em
+ * {@link RelatorioService} (CDI, Panache).
  */
 @Path("/internal/relatorio-agendado")
 public class RelatorioAgendadoResource {

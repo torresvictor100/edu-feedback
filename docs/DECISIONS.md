@@ -101,7 +101,7 @@ Como nenhuma das duas funções precisa de HTTP, CDI ou ORM reativo, o módulo `
 - O módulo `functions/` fica mais simples de explicar na avaliação: 2 componentes, 2 responsabilidades, sem mistura de estilos de código.
 - Se o admin precisar de relatórios sob demanda no futuro, a forma mais simples de reintroduzir isso é um endpoint comum (síncrono) no Serviço A — não como função serverless — para não reabrir a mistura de responsabilidades identificada aqui.
 
-**Nota:** esta ADR foi parcialmente substituída pela ADR-006 — o Serviço B voltou a usar Quarkus, mas a decisão de ter exatamente 2 funções (timer + queue), cada uma com responsabilidade única, continua valendo.
+**Nota:** esta ADR foi parcialmente substituída pela ADR-006 — o Serviço B voltou a usar Quarkus, mas a decisão de ter exatamente 2 funções (timer + queue), cada uma com responsabilidade única, continua valendo. A ADR-006, por sua vez, foi parcialmente substituída pela ADR-007 (o gatilho fino deixou de ser Azure Functions e passou a ser Azure Container Apps Jobs).
 
 ---
 
@@ -138,3 +138,40 @@ A chamada HTTP do gatilho nativo para o endpoint interno usa o hostname do próp
 - Adiciona uma chamada HTTP interna por execução (latência extra pequena, aceitável para o volume deste projeto) e uma dependência nova: `INTERNAL_TRIGGER_SECRET`, gerenciado como qualquer outro segredo (Key Vault em produção).
 - `JdbcRelatorioDao` e o `EmailSender` sem CDI foram removidos; a lógica equivalente vive em `RelatorioService`/`EmailService` (CDI) e nas entidades Panache.
 - Explicar essa arquitetura (gatilho fino + endpoint interno protegido) é parte do que deve constar no vídeo de demonstração e na documentação da avaliação — é a peça mais não óbvia do projeto.
+
+**Nota:** esta ADR foi parcialmente substituída pela ADR-007 — o gatilho fino deixou de ser Azure Functions (`@FunctionName`, `quarkus-azure-functions-http`) e passou a ser Azure Container Apps Jobs, mas a decisão central (Quarkus + endpoint interno `/internal/*` protegido por `INTERNAL_TRIGGER_SECRET`) continua valendo.
+
+---
+
+## ADR-007 — Gatilho fino via Azure Container Apps Jobs, sem Azure Functions
+
+- Data: 2026-07-26
+- Estado: aceita
+
+### Contexto
+
+O Serviço B (ADR-006) dependia do Azure Functions Java Worker só para o papel de "gatilho fino": disparar no Timer/Queue certo e repassar via HTTP para o endpoint interno Quarkus. Isso obrigava o módulo `functions/` a carregar duas peças de empacotamento diferentes no mesmo jar (`quarkus-maven-plugin` + `azure-functions-maven-plugin`) e a rodar em Azure Functions (Consumption, Linux, Java 21) — uma plataforma de deploy própria, separada do Container Apps Environment já usado pelo Serviço A.
+
+Azure Container Apps Jobs oferece os mesmos 2 modelos de gatilho que o projeto precisa — `Schedule` (cron) e `Event` (KEDA, escalado pela profundidade da fila) — como um recurso "serverless por definição" do próprio Container Apps: cobrado por execução, com `minExecutions: 0` (não fica nada rodando entre disparos), sem servidor dedicado. Isso elimina a necessidade de uma segunda plataforma de deploy (Azure Functions) só para hospedar 2 gatilhos finos, mantendo o requisito obrigatório do enunciado ("implementar serverless").
+
+### Decisão
+
+O Serviço B passa a ter 3 componentes de infraestrutura, todos no mesmo Container Apps Environment já usado pelo Serviço A (`infra/azure/main.bicep`):
+
+1. **`app-func-<ambiente>`** — Container App **sem ingress externo** (`ingress.external: false`), rodando o mesmo código Quarkus de antes (CDI, Panache, RESTEasy Reactive), agora como aplicação HTTP comum (sem `quarkus-azure-functions-http`). Só é alcançável de dentro do Container Apps Environment.
+2. **`job-relatorio-agendado-<ambiente>`** — Container Apps Job com `triggerType: Schedule` (cron `'0 8 * * 1'`, toda segunda-feira 08:00 UTC). Única responsabilidade: `curl -X POST .../internal/relatorio-agendado` com o header `X-Internal-Secret`.
+3. **`job-feedback-critico-<ambiente>`** — Container Apps Job com `triggerType: Event`, escalado por um scale rule KEDA `azure-queue` sobre a fila `notificacoes-criticas`. Única responsabilidade: consumir 1 mensagem da fila (`az storage message get`/`delete`, autenticado via connection string guardado no Key Vault) e repassar o corpo via `curl -X POST .../internal/feedback-critico`.
+
+Os 2 Jobs rodam a imagem pública `mcr.microsoft.com/azure-cli` (já traz `curl`, `jq`, `az`) — não há Dockerfile próprio para eles, só o script inline no Bicep. As classes `@FunctionName` (`FeedbackCriticoTrigger`, `RelatorioAgendadoTrigger`) e a classe auxiliar `InternalHttpCaller` foram removidas do módulo `functions/`, junto com `host.json`, `local.settings.json.example` e as dependências/plugin do Azure Functions Java Worker (`azure-functions-java-library`, `azure-functions-maven-plugin`) — nada nesse módulo depende mais do runtime do Azure Functions.
+
+O contrato dos 2 endpoints internos (`/internal/relatorio-agendado`, `/internal/feedback-critico`) não muda: continuam recebendo/validando `X-Internal-Secret` via `InternalSecretValidator` e delegando para `RelatorioService`/`EmailService` (CDI). O que muda é só quem os chama e como.
+
+### Consequências
+
+- `infra/azure/main.bicep` não provisiona mais Function App nem App Service Plan (`Microsoft.Web/sites`, `Microsoft.Web/serverfarms`). Um único Container Apps Environment (`cae-<ambiente>`) hospeda agora o Container App do Serviço A, o Container App interno do Serviço B e os 2 Jobs.
+- `functions/Dockerfile` (novo) empacota o Quarkus do Serviço B como fast-jar padrão (mesmo formato multistage do `backend/Dockerfile`) — o Serviço B passa a ter imagem de container publicada no ACR, igual ao Serviço A.
+- O scale rule KEDA `azure-queue` do Job de evento só aceita autenticação por secret referenciado (não por identidade gerenciada, nesta versão de API do Container Apps Jobs) — por isso existe um novo segredo `storage-connection-string` no Key Vault, usado só por esse Job (para o scale rule e para os comandos `az storage message`). Os demais segredos (`postgres-admin-password`, `jwt-secret`, `internal-trigger-secret`) continuam iguais.
+- Cada Job tem sua própria identidade gerenciada (`SystemAssigned`) e só recebe a role `Key Vault Secrets User` — segue o princípio do menor privilégio já usado no resto do template.
+- `.github/workflows/deploy-azure.yml`: o job `deploy-functions` deixa de rodar `azure-functions:deploy` e passa a fazer `az acr build` (a partir de `functions/Dockerfile`) + `az containerapp update` no Container App interno — mesmo padrão já usado pelo `deploy-backend`.
+- Continuam sendo exatamente 2 componentes serverless com responsabilidade única no sentido do enunciado — a diferença é que agora são 2 Azure Container Apps Jobs (Schedule + Event) em vez de 2 Azure Functions (Timer + Queue). A ADR-006 (Quarkus + endpoint interno protegido) continua valendo sem alteração de lógica de negócio.
+- Explicar essa migração (por que Container Apps Jobs em vez de Azure Functions, e como cada Job ainda é "gatilho fino, sem lógica de negócio") é parte do que deve constar no vídeo de demonstração — junto com a explicação do gatilho fino + endpoint interno da ADR-006.

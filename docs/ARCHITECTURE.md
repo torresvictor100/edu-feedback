@@ -2,7 +2,7 @@
 
 ## Status
 
-Esta arquitetura foi definida em 2026-07-22, revisada no mesmo dia (ADR-005: redução do Serviço B de 4 para 2 funções) e revisada novamente em 2026-07-24 (ADR-006: Quarkus de volta no Serviço B via gatilho nativo fino + endpoint interno). Mudanças estruturais devem ser registradas em `DECISIONS.md` antes de serem implementadas.
+Esta arquitetura foi definida em 2026-07-22, revisada no mesmo dia (ADR-005: redução do Serviço B de 4 para 2 funções), revisada em 2026-07-24 (ADR-006: Quarkus de volta no Serviço B via gatilho nativo fino + endpoint interno) e revisada novamente em 2026-07-26 (ADR-007: o gatilho fino deixou de ser Azure Functions e passou a ser Azure Container Apps Jobs). Mudanças estruturais devem ser registradas em `DECISIONS.md` antes de serem implementadas.
 
 ## Visão geral
 
@@ -18,14 +18,16 @@ Administrador (cliente externo)
   → POST /auth/login → Serviço A → JWT
   → GET /relatorios/{id} (JWT) → Serviço A → PostgreSQL (tabela relatorios)
 
-Serviço B — Funções serverless (gatilho nativo fino + endpoint interno Quarkus)
-  → [Timer trigger nativo] RelatorioAgendadoTrigger
-      → POST /internal/relatorio-agendado (mesmo Function App, X-Internal-Secret)
+Serviço B — Container App interno (Quarkus, sem ingress externo) + 2 Container
+Apps Jobs (gatilho fino, ver ADR-007)
+  → [Job "job-relatorio-agendado", Schedule trigger, cron semanal]
+      → POST /internal/relatorio-agendado (Container App interno, X-Internal-Secret)
       → RelatorioAgendadoResource (Quarkus) → RelatorioService (CDI)
       → Panache: AvaliacaoEntity (lê) + RelatorioEntity (grava) → PostgreSQL
 
-  → [Queue trigger nativo] FeedbackCriticoTrigger: processa "notificacoes-criticas"
-      → POST /internal/feedback-critico (mesmo Function App, X-Internal-Secret)
+  → [Job "job-feedback-critico", Event trigger, KEDA azure-queue sobre "notificacoes-criticas"]
+      → consome 1 mensagem da fila (az storage message get/delete)
+      → POST /internal/feedback-critico (Container App interno, X-Internal-Secret)
       → FeedbackCriticoResource (Quarkus) → AdminEntity (Panache, lê e-mails)
       → EmailService (CDI) → Azure Communication Services (e-mail ao admin)
 
@@ -37,12 +39,13 @@ Serviço B — Funções serverless (gatilho nativo fino + endpoint interno Quar
 | Camada         | Tecnologia                     |
 |----------------|-------------------------------|
 | Backend (API)  | Java 21 + Spring Boot 3.3.x (Maven) |
-| Backend (funções) | Java 21 + Quarkus 3.x (lógica de negócio) + Azure Functions Java Worker puro (gatilhos nativos) — Maven |
+| Backend (Serviço B) | Java 21 + Quarkus 3.x (Maven) — app HTTP comum, sem dependência de runtime serverless próprio |
+| Gatilho fino (Serviço B) | Azure Container Apps Jobs (Schedule + Event/KEDA) — scripts `sh`/`az cli` inline no Bicep, sem código Java |
 | Frontend       | Não aplicável (sem frontend) |
 | Banco de dados | PostgreSQL 16 (compartilhado pelos dois serviços) |
 | Autenticação   | JWT stateless (HS256, `io.jsonwebtoken:jjwt`) — só no Serviço A. Serviço B usa um segredo compartilhado próprio (`INTERNAL_TRIGGER_SECRET`) só entre gatilho e endpoint interno |
 | Migrations     | Flyway (propriedade exclusiva do Serviço A) |
-| Deploy         | Serviço A → Azure Container Apps · Serviço B → Azure Functions |
+| Deploy         | Serviço A → Azure Container Apps (Container App público) · Serviço B → Azure Container Apps (Container App interno + 2 Jobs) |
 | IA integrada   | Não aplicável |
 
 ## Estrutura de módulos
@@ -89,19 +92,16 @@ backend/
 
 ### Backend — Serviço B (`functions/`)
 
-Exatamente 2 funções, cada uma com um único trigger e uma única responsabilidade (ADR-005). Cada função tem duas partes (ADR-006): um gatilho nativo fino (sem CDI) e um endpoint Quarkus interno (CDI, Panache) que faz o trabalho de verdade.
+Exatamente 2 endpoints internos, cada um com uma única responsabilidade (ADR-005), cada um acionado por um Container Apps Job dedicado — gatilho fino, sem lógica de negócio, definido só em `infra/azure/main.bicep` (ADR-007). O módulo `functions/` só contém a parte Quarkus (CDI, Panache) — não há mais classes de gatilho em Java.
 
 ```
 functions/
 ├── src/main/java/br/com/edufeedback/functions/
-│   ├── timer/
-│   │   └── RelatorioAgendadoTrigger.java      ← Timer Trigger nativo: só repassa via HTTP
 │   ├── notificacao/
-│   │   ├── FeedbackCriticoTrigger.java        ← Queue Trigger nativo: só repassa via HTTP
-│   │   ├── FeedbackCriticoResource.java       ← endpoint interno Quarkus (CDI)
+│   │   ├── FeedbackCriticoResource.java       ← endpoint interno Quarkus (CDI), acionado pelo job-feedback-critico
 │   │   └── FeedbackCriticoPayload.java        ← DTO do corpo da fila/requisição
 │   ├── relatorio/
-│   │   ├── RelatorioAgendadoResource.java     ← endpoint interno Quarkus (CDI)
+│   │   ├── RelatorioAgendadoResource.java     ← endpoint interno Quarkus (CDI), acionado pelo job-relatorio-agendado
 │   │   ├── RelatorioService.java              ← regra de negócio (CDI, Panache)
 │   │   ├── RelatorioEntity.java               ← entidade Panache (tabela relatorios)
 │   │   ├── TipoRelatorio.java / StatusRelatorio.java
@@ -110,16 +110,16 @@ functions/
 │   ├── admin/
 │   │   └── AdminEntity.java                   ← entidade Panache, só leitura (tabela admins)
 │   └── shared/
-│       ├── InternalHttpCaller.java            ← chamada HTTP gatilho → endpoint interno
 │       ├── InternalSecretValidator.java       ← valida X-Internal-Secret nos endpoints internos
 │       ├── EmailService.java                  ← CDI, Azure Communication Services
 │       ├── Agregados.java / AvaliacaoResumo.java
 │       └── AgregadosJsonSerializer.java
 ├── src/main/resources/application.properties  ← config Quarkus (datasource, segredo interno)
-├── host.json
-├── local.settings.json.example
+├── Dockerfile                                  ← build multistage, app HTTP comum (porta 8080)
 └── pom.xml
 ```
+
+Os 2 gatilhos finos (`job-relatorio-agendado`, `job-feedback-critico`) vivem só como recursos `Microsoft.App/jobs` em `infra/azure/main.bicep` — scripts `sh`/`az cli` inline, sem módulo Java próprio (ver ADR-007).
 
 ### Frontend
 
@@ -129,7 +129,7 @@ Não aplicável — cliente é externo a este repositório.
 
 - Um módulo não acessa diretamente o código interno de outro módulo.
 - Comunicação entre o Serviço A e o Serviço B ocorre via banco de dados compartilhado e a fila `notificacoes-criticas` — nunca chamada HTTP síncrona direta entre os dois serviços.
-- Dentro do Serviço B, a comunicação entre gatilho nativo e endpoint interno é uma chamada HTTP autenticada por segredo compartilhado (`INTERNAL_TRIGGER_SECRET`) para o próprio Function App — não é CDI, porque o gatilho nativo não roda dentro do container do Quarkus.
+- Dentro do Serviço B, a comunicação entre o Job (gatilho fino) e o endpoint interno é uma chamada HTTP autenticada por segredo compartilhado (`INTERNAL_TRIGGER_SECRET`) para o Container App interno (sem ingress externo) — não é CDI, porque o Job roda num container separado, fora do processo Quarkus.
 - `RelatorioAgendadoResource`/`RelatorioService` e `FeedbackCriticoResource`/`EmailService` não têm dependência entre si; compartilham apenas classes utilitárias em `shared/`.
 
 ## Decisões de arquitetura

@@ -9,16 +9,13 @@
     <version>0.0.1-SNAPSHOT</version>
     <packaging>jar</packaging>
     <name>functions</name>
-    <description>EduFeedback - Funcoes serverless (Servico B): notificacao de feedback critico e relatorio agendado</description>
+    <description>EduFeedback - Servico B (Quarkus): endpoints internos de notificacao de feedback critico e relatorio agendado, acionados pelos 2 Container Apps Jobs</description>
 
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.version>3.15.1</quarkus.platform.version>
-        <azure.functions.java.library.version>3.3.0</azure.functions.java.library.version>
-        <azure.functions.maven.plugin.version>1.42.0</azure.functions.maven.plugin.version>
-        <functionAppName>edu-feedback-functions</functionAppName>
     </properties>
 
     <dependencyManagement>
@@ -44,12 +41,10 @@
     </dependencyManagement>
 
     <dependencies>
-        <!-- Os 2 endpoints internos (chamados pelos gatilhos nativos finos abaixo)
-             são Quarkus de verdade: CDI, RESTEasy Reactive, Panache. -->
-        <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-azure-functions-http</artifactId>
-        </dependency>
+        <!-- Os 2 endpoints internos (chamados pelos 2 Container Apps Jobs — gatilho
+             fino, ver ADR-007 em docs/DECISIONS.md) são Quarkus de verdade: CDI,
+             RESTEasy Reactive, Panache. Roda como app HTTP comum (Vert.x embutido,
+             porta 8080), sem nenhuma dependência do runtime do Azure Functions. -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-resteasy-reactive-jackson</artifactId>
@@ -69,15 +64,6 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-smallrye-health</artifactId>
-        </dependency>
-
-        <!-- Gatilhos Timer/Queue (ver ADR-006 em docs/DECISIONS.md): classes finas,
-             modelo padrão do Azure Functions Java Worker, sem CDI — só repassam a
-             chamada para os endpoints internos do Quarkus via HTTP. -->
-        <dependency>
-            <groupId>com.microsoft.azure.functions</groupId>
-            <artifactId>azure-functions-java-library</artifactId>
-            <version>${azure.functions.java.library.version}</version>
         </dependency>
 
         <dependency>
@@ -145,35 +131,6 @@
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                     </systemPropertyVariables>
                 </configuration>
-            </plugin>
-            <plugin>
-                <groupId>com.microsoft.azure</groupId>
-                <artifactId>azure-functions-maven-plugin</artifactId>
-                <version>${azure.functions.maven.plugin.version}</version>
-                <configuration>
-                    <appName>${functionAppName}</appName>
-                    <resourceGroup>rg-edu-feedback</resourceGroup>
-                    <appServicePlanName>asp-edu-feedback</appServicePlanName>
-                    <region>brazilsouth</region>
-                    <runtime>
-                        <os>linux</os>
-                        <javaVersion>21</javaVersion>
-                    </runtime>
-                    <appSettings>
-                        <property>
-                            <name>FUNCTIONS_EXTENSION_VERSION</name>
-                            <value>~4</value>
-                        </property>
-                    </appSettings>
-                </configuration>
-                <executions>
-                    <execution>
-                        <id>package-functions</id>
-                        <goals>
-                            <goal>package</goal>
-                        </goals>
-                    </execution>
-                </executions>
             </plugin>
         </plugins>
     </build>

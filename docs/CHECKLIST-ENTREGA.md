@@ -8,12 +8,12 @@ Este documento cruza o enunciado do desafio com o que já está pronto no reposi
 
 | Requisito | Status | Onde está |
 |---|---|---|
-| Ambiente de nuvem configurado e funcionando, com segurança e governança de acesso | 🟡 Infra pronta como código, **não provisionada de verdade** | `infra/azure/main.bicep` (RBAC real: `AcrPull`, `Key Vault Secrets User`, `Storage Queue Data Contributor`) |
+| Ambiente de nuvem configurado e funcionando, com segurança e governança de acesso | 🟡 Infra pronta como código, **não provisionada de verdade** | `infra/azure/main.bicep` (RBAC real: `AcrPull`, `Key Vault Secrets User` para cada Container App/Job) |
 | Configuração dos componentes de suporte (banco de dados etc.) | 🟡 Definido no Bicep, **não provisionado** | PostgreSQL Flexible Server em `main.bicep` |
-| Deploy automatizado dos componentes atualizáveis (funções) | 🟡 Pipeline pronto, **nunca executado** | `.github/workflows/deploy-azure.yml` |
+| Deploy automatizado dos componentes atualizáveis (Serviço B) | 🟡 Pipeline pronto, **nunca executado** | `.github/workflows/deploy-azure.yml` |
 | Aplicação monitorada | 🟡 Alertas definidos no Bicep, **não provisionados** | Application Insights + 2 Metric Alerts + Action Group em `main.bicep` |
-| Notificações automáticas para itens críticos | 🟢 Implementado e testado localmente | `FeedbackCriticoTrigger` + `FeedbackCriticoResource` (Quarkus) |
-| Relatório semanal com média de avaliações | 🟢 Implementado e testado localmente | `RelatorioAgendadoTrigger` + `RelatorioAgendadoResource` (Quarkus, cron padrão semanal) |
+| Notificações automáticas para itens críticos | 🟢 Implementado e testado localmente | Job `job-feedback-critico` (Event/KEDA) + `FeedbackCriticoResource` (Quarkus) |
+| Relatório semanal com média de avaliações | 🟢 Implementado e testado localmente | Job `job-relatorio-agendado` (Schedule) + `RelatorioAgendadoResource` (Quarkus, cron padrão semanal) |
 
 🟢 = pronto e validado localmente · 🟡 = código/infra pronta, falta executar na Azure de verdade · 🔴 = não existe ainda
 
@@ -21,9 +21,9 @@ Este documento cruza o enunciado do desafio com o que já está pronto no reposi
 
 | Regra | Status |
 |---|---|
-| Implementar serverless | 🟢 2 Azure Functions (gatilho Timer + gatilho Queue), cada uma repassando para um endpoint Quarkus interno |
+| Implementar serverless | 🟢 2 Azure Container Apps Jobs (Schedule + Event/KEDA, ver ADR-007), cada um repassando para um endpoint Quarkus interno |
 | Rodar em ambiente cloud | 🟡 Desenhado para Azure; falta o provisionamento real |
-| Mínimo 2 funções serverless, com Responsabilidade Única por componente | 🟢 Exatamente 2 funções, cada uma com um único trigger e uma única responsabilidade (ver ADR-005 e ADR-006 em `DECISIONS.md`) |
+| Mínimo 2 funções serverless, com Responsabilidade Única por componente | 🟢 Exatamente 2 componentes serverless, cada um com um único trigger e uma única responsabilidade (ver ADR-005, ADR-006 e ADR-007 em `DECISIONS.md`) |
 
 ## 3. Artefatos de entrega
 
@@ -105,12 +105,12 @@ Depois do `create`, aceite o e-mail de confirmação do Action Group (chega em `
 ### Passo 6 — Verificar que subiu certo
 
 - `curl https://<containerAppFqdn>/actuator/health` → `{"status":"UP"}`.
-- Portal do Function App → aba "Functions" → `RelatorioAgendado` e `FeedbackCritico` aparecendo, "Enabled".
-- `curl -X POST https://<functionAppName>.azurewebsites.net/api/internal/relatorio-agendado -H "X-Internal-Secret: <valor>"` deve responder 200 (sem o header, 401) — confirma que a chamada function-to-function funciona de verdade em produção, não só localmente.
+- Portal do Container Apps Job → `job-relatorio-agendado-...` e `job-feedback-critico-...` → aba "Execution history" com execuções "Succeeded".
+- Rodar manualmente um Job para validar sem esperar o cron/a fila: `az containerapp job start --name job-relatorio-agendado-edufeedback-<ambiente> --resource-group <rg>` — deve responder 200 no endpoint interno e persistir o relatório (sem o `X-Internal-Secret` correto, o endpoint responde 401 — confirma que a chamada Job → Container App interno funciona de verdade em produção, não só localmente).
 - Monitor → Alerts → Alert rules → os 2 alertas como "Enabled".
 - Rodar a coleção Postman contra a URL real do Container App.
 - Enviar uma avaliação crítica (nota ≤ 3) de teste e confirmar que o e-mail chega via Azure Communication Services.
-- Se o Container App ou o Function App falharem ao subir por causa do Key Vault, reiniciar a revision/o Function App (a role RBAC pode levar alguns minutos para se propagar — ver nota em `main.bicep`).
+- Se algum dos 2 Container Apps ou 2 Jobs falhar por causa do Key Vault, reiniciar a revision do Container App afetado ou aguardar a próxima execução do Job (a role RBAC pode levar alguns minutos para se propagar — ver nota em `main.bicep`).
 
 ### Passo 7 — Trocar credenciais de desenvolvimento
 
@@ -120,13 +120,13 @@ Depois do `create`, aceite o e-mail de confirmação do Action Group (chega em `
 
 Roteiro sugerido (o enunciado pede: aplicação em funcionamento, funções serverless ativas, configurações do projeto):
 
-1. Mostrar o resource group na Azure com todos os recursos provisionados (Container App, Function App, Postgres, Key Vault, Storage, Application Insights).
-2. Explicar rapidamente o modelo de cloud escolhido: por que Container Apps para a API e Functions para o serverless, por que 2 funções (mostrar a ADR-005 e a ADR-006 em `docs/DECISIONS.md`) e como cada uma tem responsabilidade única.
-3. Explicar a arquitetura interna do Serviço B: gatilho nativo fino (Timer/Queue) chamando um endpoint Quarkus interno protegido por segredo — vale a pena mostrar o código (`RelatorioAgendadoTrigger` → `RelatorioAgendadoResource` → `RelatorioService`) já que é a parte mais não óbvia do projeto e onde entra o Quarkus.
+1. Mostrar o resource group na Azure com todos os recursos provisionados (2 Container Apps, 2 Container Apps Jobs, Postgres, Key Vault, Storage, Application Insights).
+2. Explicar rapidamente o modelo de cloud escolhido: por que Container Apps para os dois serviços — a API sempre ativa (Serviço A) e o endpoint interno (Serviço B) num Container App só ingerido internamente, com os 2 Jobs (Schedule + Event/KEDA) como componente serverless de responsabilidade única (mostrar a ADR-005, ADR-006 e ADR-007 em `docs/DECISIONS.md`).
+3. Explicar a arquitetura interna do Serviço B: o Job (gatilho fino, sem lógica de negócio) chamando um endpoint Quarkus interno protegido por segredo — vale a pena mostrar o código (`RelatorioAgendadoResource` → `RelatorioService`) e o script do Job em `infra/azure/main.bicep`, já que é a parte mais não óbvia do projeto e onde entra o Quarkus.
 4. Mostrar a segurança/governança configurada: Managed Identity + roles RBAC (não credenciais soltas), segredos no Key Vault.
 5. Enviar uma avaliação normal via Postman/curl — mostrar salvando no banco.
-6. Enviar uma avaliação crítica — mostrar o e-mail de notificação chegando (via `FeedbackCriticoTrigger` → `FeedbackCriticoResource`).
-7. Mostrar a função `RelatorioAgendado` rodando (disparo manual pelo portal ou aguardar o timer) e o relatório sendo persistido — consultar via `GET /relatorios/{id}`.
+6. Enviar uma avaliação crítica — mostrar o Job `job-feedback-critico` disparando (escalado pelo KEDA) e o e-mail de notificação chegando (via `FeedbackCriticoResource`).
+7. Mostrar o Job `job-relatorio-agendado` rodando (disparo manual via `az containerapp job start` ou aguardar o cron) e o relatório sendo persistido — consultar via `GET /relatorios/{id}`.
 8. Mostrar o Application Insights com logs/telemetria dos dois serviços e os 2 alertas configurados.
 9. Fechar mostrando o repositório no GitHub (código-fonte aberto).
 

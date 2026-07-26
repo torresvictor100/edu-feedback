@@ -14,9 +14,11 @@ import java.util.List;
 
 /**
  * Endpoint interno (protegido por {@code InternalSecretValidator}) acionado
- * pelo gatilho Queue nativo {@code FeedbackCriticoTrigger}. Única
- * responsabilidade: notificar os administradores por e-mail com os dados
- * exigidos pelo enunciado (descrição, urgência, data de envio).
+ * pelo Container Apps Job de evento "job-feedback-critico" (escalado pela
+ * profundidade da fila "notificacoes-criticas", ver ADR-007 em
+ * docs/DECISIONS.md). Única responsabilidade: notificar os administradores
+ * por e-mail com os dados exigidos pelo enunciado (descrição, urgência, data
+ * de envio).
  */
 @Path("/internal/feedback-critico")
 public class FeedbackCriticoResource {

@@ -5,9 +5,10 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * Valida o cabeçalho {@code X-Internal-Secret} nos endpoints "/internal/*".
- * Essas rotas só existem para os gatilhos nativos (Timer/Queue) chamarem —
- * nunca para clientes externos — mesmo estando atrás do proxy HTTP público do
- * quarkus-azure-functions-http. Sem o segredo correto, o endpoint deve
+ * Essas rotas só existem para os 2 Container Apps Jobs (gatilho fino, ver
+ * ADR-007 em docs/DECISIONS.md) chamarem — nunca para clientes externos. O
+ * Container App deste módulo não tem ingress externo, mas a checagem continua
+ * como segunda camada de defesa. Sem o segredo correto, o endpoint deve
  * responder 401 antes de executar qualquer lógica de negócio.
  */
 @ApplicationScoped
