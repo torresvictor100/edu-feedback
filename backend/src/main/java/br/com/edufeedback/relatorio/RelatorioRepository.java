@@ -1,7 +1,0 @@
-package br.com.edufeedback.relatorio;
-
-import java.util.UUID;
-import org.springframework.data.jpa.repository.JpaRepository;
-
-public interface RelatorioRepository extends JpaRepository<Relatorio, UUID> {
-}

@@ -1,5 +1,6 @@
 package br.com.edufeedback.auth;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -39,5 +40,19 @@ class AuthIntegrationTest extends IntegrationTestBase {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\": \"naoexiste@edufeedback.local\", \"senha\": \"qualquer\"}"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void deveRetornarRequisicaoInvalidaParaCorpoMalformado() throws Exception {
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{corpo invalido"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void deveRetornarMetodoNaoSuportadoParaVerboIncorreto() throws Exception {
+        mockMvc.perform(get("/auth/login"))
+                .andExpect(status().isMethodNotAllowed());
     }
 }

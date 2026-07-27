@@ -17,14 +17,16 @@
 // Nenhum valor real de credencial fica neste arquivo — segredos são gerados ou
 // referenciados via Key Vault. Revise nomes, região e SKUs antes de executar.
 //
-// Nota de bootstrapping: os 2 Container Apps e os 2 Jobs usam identidade
-// gerenciada (SystemAssigned) para ler segredos do Key Vault (e, no caso do Job
-// de feedback crítico, para ler/apagar mensagens da fila via Azure AD). Como o
-// role assignment só pode ser criado depois que a identidade existe, é possível
-// que a primeira execução falhe ao resolver a referência do Key Vault antes da
-// role se propagar — se isso acontecer, reinicie a revision do Container App
-// afetado ou apenas aguarde a próxima execução do Job (ação humana, documentada
-// em AZURE-DEPLOY.md).
+// Identidade: os 2 Container Apps e os 2 Jobs usam identidades gerenciadas do
+// tipo User-Assigned (`identityApps`, `identityJobs`), não SystemAssigned — ver
+// ADR-008 em docs/DECISIONS.md. Motivo: com SystemAssigned, a identidade só
+// existe depois que o próprio Container App/Job é criado, então a role
+// (`AcrPull`/`Key Vault Secrets User`) só pode ser concedida depois — mas a
+// primeira revision já tenta usar essa role para puxar a imagem/ler segredos,
+// criando um ciclo sem saída (confirmado na prática: erro "Identity with
+// resource ID 'system' not found for registry..."). Com User-Assigned, a
+// identidade e sua role existem *antes* de qualquer Container App/Job ser
+// criado, então não há ciclo.
 
 @description('Prefixo usado nos nomes dos recursos.')
 param projectName string = 'edufeedback'
@@ -204,6 +206,49 @@ resource postgresFirewallAllowAzure 'Microsoft.DBforPostgreSQL/flexibleServers/f
   }
 }
 
+// Identidades User-Assigned compartilhadas (ver ADR-008 em docs/DECISIONS.md):
+// criadas como recursos independentes, sem depender de nenhum Container
+// App/Job, para que a role já exista antes de qualquer app/job precisar dela.
+resource identityApps 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'id-apps-${suffix}'
+  location: location
+}
+
+resource identityJobs 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'id-jobs-${suffix}'
+  location: location
+}
+
+resource identityAppsAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(acr.id, identityApps.id, roleAcrPull)
+  scope: acr
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleAcrPull)
+    principalId: identityApps.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource identityAppsKeyVaultAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVault.id, identityApps.id, roleKeyVaultSecretsUser)
+  scope: keyVault
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleKeyVaultSecretsUser)
+    principalId: identityApps.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource identityJobsKeyVaultAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVault.id, identityJobs.id, roleKeyVaultSecretsUser)
+  scope: keyVault
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleKeyVaultSecretsUser)
+    principalId: identityJobs.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Ambiente único, reaproveitado pelo Container App do Serviço A, pelo Container
 // App interno do Serviço B e pelos 2 Jobs do Serviço B (ver ADR-007).
 resource containerAppsEnv 'Microsoft.App/managedEnvironments@2023-05-01' = {
@@ -223,13 +268,16 @@ resource containerAppsEnv 'Microsoft.App/managedEnvironments@2023-05-01' = {
 resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
   name: 'app-${suffix}'
   location: location
-  identity: { type: 'SystemAssigned' }
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${identityApps.id}': {} }
+  }
   properties: {
     managedEnvironmentId: containerAppsEnv.id
     configuration: {
       secrets: [
-        { name: 'postgres-password', keyVaultUrl: kvSecretPostgresPassword.properties.secretUri, identity: 'system' }
-        { name: 'jwt-secret', keyVaultUrl: kvSecretJwt.properties.secretUri, identity: 'system' }
+        { name: 'postgres-password', keyVaultUrl: kvSecretPostgresPassword.properties.secretUri, identity: identityApps.id }
+        { name: 'jwt-secret', keyVaultUrl: kvSecretJwt.properties.secretUri, identity: identityApps.id }
       ]
       ingress: {
         external: true
@@ -239,7 +287,7 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
       registries: [
         {
           server: '${acrName}.azurecr.io'
-          identity: 'system'
+          identity: identityApps.id
         }
       ]
     }
@@ -266,28 +314,6 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
   }
 }
 
-// Governança de acesso: cada identidade gerenciada só recebe a role mínima que
-// precisa (princípio do menor privilégio), nunca a chave/connection string bruta.
-resource containerAppAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, containerApp.id, roleAcrPull)
-  scope: acr
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleAcrPull)
-    principalId: containerApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource containerAppKeyVaultAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, containerApp.id, roleKeyVaultSecretsUser)
-  scope: keyVault
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleKeyVaultSecretsUser)
-    principalId: containerApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
 // Serviço B — Container App interno (sem ingress externo): só o Quarkus com os
 // 2 endpoints internos protegidos por X-Internal-Secret (ver ADR-007). Só é
 // alcançável de dentro do Container Apps Environment (pelos 2 Jobs abaixo),
@@ -295,13 +321,16 @@ resource containerAppKeyVaultAccess 'Microsoft.Authorization/roleAssignments@202
 resource containerAppFunc 'Microsoft.App/containerApps@2023-05-01' = {
   name: 'app-func-${suffix}'
   location: location
-  identity: { type: 'SystemAssigned' }
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${identityApps.id}': {} }
+  }
   properties: {
     managedEnvironmentId: containerAppsEnv.id
     configuration: {
       secrets: [
-        { name: 'postgres-password', keyVaultUrl: kvSecretPostgresPassword.properties.secretUri, identity: 'system' }
-        { name: 'internal-trigger-secret', keyVaultUrl: kvSecretInternalTrigger.properties.secretUri, identity: 'system' }
+        { name: 'postgres-password', keyVaultUrl: kvSecretPostgresPassword.properties.secretUri, identity: identityApps.id }
+        { name: 'internal-trigger-secret', keyVaultUrl: kvSecretInternalTrigger.properties.secretUri, identity: identityApps.id }
       ]
       ingress: {
         external: false
@@ -311,7 +340,7 @@ resource containerAppFunc 'Microsoft.App/containerApps@2023-05-01' = {
       registries: [
         {
           server: '${acrName}.azurecr.io'
-          identity: 'system'
+          identity: identityApps.id
         }
       ]
     }
@@ -341,32 +370,15 @@ resource containerAppFunc 'Microsoft.App/containerApps@2023-05-01' = {
   }
 }
 
-resource containerAppFuncAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, containerAppFunc.id, roleAcrPull)
-  scope: acr
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleAcrPull)
-    principalId: containerAppFunc.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource containerAppFuncKeyVaultAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, containerAppFunc.id, roleKeyVaultSecretsUser)
-  scope: keyVault
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleKeyVaultSecretsUser)
-    principalId: containerAppFunc.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
 // Job 1 (Schedule trigger) — única responsabilidade: disparar semanalmente e
 // repassar via HTTP para o endpoint interno de relatório agendado (ver ADR-007).
 resource jobRelatorioAgendado 'Microsoft.App/jobs@2024-03-01' = {
-  name: 'job-relatorio-agendado-${suffix}'
+  name: 'job-relat-${suffix}'
   location: location
-  identity: { type: 'SystemAssigned' }
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${identityJobs.id}': {} }
+  }
   properties: {
     environmentId: containerAppsEnv.id
     configuration: {
@@ -379,7 +391,7 @@ resource jobRelatorioAgendado 'Microsoft.App/jobs@2024-03-01' = {
       replicaTimeout: 300
       replicaRetryLimit: 1
       secrets: [
-        { name: 'internal-trigger-secret', keyVaultUrl: kvSecretInternalTrigger.properties.secretUri, identity: 'system' }
+        { name: 'internal-trigger-secret', keyVaultUrl: kvSecretInternalTrigger.properties.secretUri, identity: identityJobs.id }
       ]
     }
     template: {
@@ -400,16 +412,6 @@ resource jobRelatorioAgendado 'Microsoft.App/jobs@2024-03-01' = {
   }
 }
 
-resource jobRelatorioAgendadoKeyVaultAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, jobRelatorioAgendado.id, roleKeyVaultSecretsUser)
-  scope: keyVault
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleKeyVaultSecretsUser)
-    principalId: jobRelatorioAgendado.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
 // Job 2 (Event trigger, escalado pelo KEDA via profundidade da fila) — única
 // responsabilidade: consumir 1 mensagem de "notificacoes-criticas" e repassar
 // via HTTP para o endpoint interno de feedback crítico (ver ADR-007). O scale
@@ -418,9 +420,12 @@ resource jobRelatorioAgendadoKeyVaultAccess 'Microsoft.Authorization/roleAssignm
 // connection string da Storage Account fica no Key Vault (`storage-connection-
 // string`) e é referenciado tanto pelo scale rule quanto pelo próprio container.
 resource jobFeedbackCritico 'Microsoft.App/jobs@2024-03-01' = {
-  name: 'job-feedback-critico-${suffix}'
+  name: 'job-crit-${suffix}'
   location: location
-  identity: { type: 'SystemAssigned' }
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${identityJobs.id}': {} }
+  }
   properties: {
     environmentId: containerAppsEnv.id
     configuration: {
@@ -450,8 +455,8 @@ resource jobFeedbackCritico 'Microsoft.App/jobs@2024-03-01' = {
       replicaTimeout: 120
       replicaRetryLimit: 1
       secrets: [
-        { name: 'internal-trigger-secret', keyVaultUrl: kvSecretInternalTrigger.properties.secretUri, identity: 'system' }
-        { name: 'storage-connection', keyVaultUrl: kvSecretStorageConnection.properties.secretUri, identity: 'system' }
+        { name: 'internal-trigger-secret', keyVaultUrl: kvSecretInternalTrigger.properties.secretUri, identity: identityJobs.id }
+        { name: 'storage-connection', keyVaultUrl: kvSecretStorageConnection.properties.secretUri, identity: identityJobs.id }
       ]
     }
     template: {
@@ -470,16 +475,6 @@ resource jobFeedbackCritico 'Microsoft.App/jobs@2024-03-01' = {
         }
       ]
     }
-  }
-}
-
-resource jobFeedbackCriticoKeyVaultAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, jobFeedbackCritico.id, roleKeyVaultSecretsUser)
-  scope: keyVault
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleKeyVaultSecretsUser)
-    principalId: jobFeedbackCritico.identity.principalId
-    principalType: 'ServicePrincipal'
   }
 }
 

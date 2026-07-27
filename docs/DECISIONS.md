@@ -175,3 +175,40 @@ O contrato dos 2 endpoints internos (`/internal/relatorio-agendado`, `/internal/
 - `.github/workflows/deploy-azure.yml`: o job `deploy-functions` deixa de rodar `azure-functions:deploy` e passa a fazer `az acr build` (a partir de `functions/Dockerfile`) + `az containerapp update` no Container App interno — mesmo padrão já usado pelo `deploy-backend`.
 - Continuam sendo exatamente 2 componentes serverless com responsabilidade única no sentido do enunciado — a diferença é que agora são 2 Azure Container Apps Jobs (Schedule + Event) em vez de 2 Azure Functions (Timer + Queue). A ADR-006 (Quarkus + endpoint interno protegido) continua valendo sem alteração de lógica de negócio.
 - Explicar essa migração (por que Container Apps Jobs em vez de Azure Functions, e como cada Job ainda é "gatilho fino, sem lógica de negócio") é parte do que deve constar no vídeo de demonstração — junto com a explicação do gatilho fino + endpoint interno da ADR-006.
+
+---
+
+## ADR-008 — Camadas de Clean Architecture dentro de cada módulo de domínio
+
+- Data: 2026-07-27
+- Estado: aceita
+
+### Contexto
+
+Pedido do usuário: refatorar os dois serviços para uma arquitetura mais limpa, com fronteira formal entre regra de negócio e framework. Até aqui, cada módulo (`auth`, `avaliacao`, `relatorio` no Serviço A; `notificacao`, `relatorio`, `avaliacao`, `admin` no Serviço B) era uma pasta única e "achatada": controller/resource, service, entidade JPA/Panache e repositório no mesmo pacote, sem inversão de dependência — a regra de negócio dependia diretamente de Spring Data, JPA, Panache ou do SDK do Azure.
+
+A ADR-002 já definia organização por módulo de domínio, não por tipo técnico de arquivo. A decisão aqui precisava escolher entre reestruturar por camada no topo de cada serviço (contradizendo a ADR-002) ou aplicar camadas **dentro** de cada módulo (preservando-a). O usuário confirmou a segunda opção.
+
+### Decisão
+
+Cada módulo de domínio (nos dois serviços) passa a ter até três subpacotes:
+
+1. **`domain/`** — entidade pura (POJO/record, sem anotação de framework) + enums/value objects + portas (interfaces) que a camada de aplicação precisa (repositório, publicador de fila, gerador de token, remetente de e-mail). Não importa Spring, JPA, Panache, Quarkus CDI ou SDK do Azure.
+2. **`application/`** — caso de uso (`*UseCase`) que orquestra `domain/` através das portas. Só existe em módulos com regra de negócio própria; módulos só de leitura/apoio (`avaliacao` e `admin` no Serviço B) ficam só com `domain/` + `infrastructure/persistence/`.
+3. **`infrastructure/`** — única camada que conhece framework: `web/` (controller/resource + DTOs de request/response), `persistence/` (entidade mapeada + repositório de framework + adapter que implementa a porta do domínio), e conforme o módulo, `messaging/`, `security/` ou `email/`.
+
+Exceções pragmáticas registradas (para não inflar o projeto com abstração sem uso real, seguindo o espírito da ADR-002):
+
+- `PasswordEncoder` (Spring Security) é usado diretamente na camada de aplicação do módulo `auth` do Serviço A — já é uma abstração estável do stack aprovado; embrulhar de novo em outra porta seria só cerimônia.
+- `JwtTokenGerador` (Serviço A) implementa a porta de domínio `TokenGerador` (geração de token) e também expõe extração/validação de token, usadas só pelo `JwtAuthenticationFilter` — uma peça 100% de infraestrutura (filtro de segurança), por isso essas duas operações não viram porta de domínio.
+- No Serviço B, entidades Panache continuam estendendo `PanacheEntityBase` (mapeamento), mas a camada de aplicação nunca as usa diretamente nem chama seus métodos estáticos de active record — todo acesso passa por uma classe `*PanacheRepository` (`implements PanacheRepository<Entidade>`, padrão repositório oficial do Panache) injetada num adapter que implementa a porta de domínio.
+- `config/` e `shared/exception/` no Serviço A, e `shared/InternalSecretValidator` no Serviço B, continuam fora de qualquer módulo — são peças cross-cutting de infraestrutura sem regra de negócio, e a ADR-002 só permite compartilhar código com uso real em mais de um módulo.
+
+Nenhum contrato de API muda (rotas, request/response, status HTTP, comportamento de autenticação/erros idênticos ao anterior).
+
+### Consequências
+
+- Mais classes por módulo (POJO de domínio + porta + entidade de framework + adapter, em vez de uma classe "tudo em um") em troca de regra de negócio testável sem subir Spring, Quarkus, JPA ou Panache — os testes unitários dos casos de uso mockam só as portas.
+- `docs/ARCHITECTURE.md` foi atualizado com as árvores de pastas por módulo refletindo `domain/application/infrastructure`.
+- Renomeações relevantes: `AuthService` → `AutenticarAdminUseCase`, `AvaliacaoService` → `RegistrarAvaliacaoUseCase`, `RelatorioService` (Serviço B) → `GerarRelatorioAgendadoUseCase`, `JwtService` → `JwtTokenGerador`, `NotificacaoCriticaPublisher` (implementação) → `AzureQueueNotificacaoCriticaPublisher`, `EmailService` → `AzureEmailSender`. As entidades JPA/Panache ganharam sufixo `JpaEntity`/`PanacheEntity` para diferenciar do POJO de domínio de mesmo conceito (ex.: `Avaliacao` domínio vs. `AvaliacaoJpaEntity` infraestrutura).
+- `Agregados`/`AvaliacaoResumo` (Serviço B) migraram de `shared/` para `relatorio/domain/`, já que só são usados por esse módulo — `AgregadosJsonSerializer` migrou para `relatorio/infrastructure/persistence/`, já que serializar para JSON é detalhe de persistência (coluna `conteudo` jsonb), não regra de negócio.

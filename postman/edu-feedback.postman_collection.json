@@ -105,6 +105,31 @@
           ]
         },
         {
+          "name": "Listar relatórios",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/relatorios", "host": ["{{baseUrl}}"], "path": ["relatorios"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "if (Array.isArray(body) && body.length > 0) {",
+                  "  pm.environment.set('relatorioId', body[0].id);",
+                  "  pm.collectionVariables.set('relatorioId', body[0].id);",
+                  "} else {",
+                  "  console.warn('Nenhum relatório encontrado ainda — relatorioId não foi atualizado.');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Consultar relatório",
           "request": {
             "method": "GET",
@@ -134,6 +159,6 @@
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8080" },
     { "key": "token", "value": "" },
-    { "key": "relatorioId", "value": "", "description": "Preencher com o id gerado pela função de relatório agendado (Serviço B) — consultar direto na tabela relatorios, já que não há endpoint para listá-los nesta versão." }
+    { "key": "relatorioId", "value": "", "description": "Preenchido automaticamente pela request 'Listar relatórios' (roda antes de 'Consultar relatório') com o id do relatório mais recente, se já existir algum." }
   ]
 }

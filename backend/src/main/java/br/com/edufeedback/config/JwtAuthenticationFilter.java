@@ -1,6 +1,6 @@
 package br.com.edufeedback.config;
 
-import br.com.edufeedback.auth.JwtService;
+import br.com.edufeedback.auth.infrastructure.security.JwtTokenGerador;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,10 +19,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String PREFIXO_BEARER = "Bearer ";
 
-    private final JwtService jwtService;
+    private final JwtTokenGerador jwtTokenGerador;
 
-    public JwtAuthenticationFilter(JwtService jwtService) {
-        this.jwtService = jwtService;
+    public JwtAuthenticationFilter(JwtTokenGerador jwtTokenGerador) {
+        this.jwtTokenGerador = jwtTokenGerador;
     }
 
     @Override
@@ -36,8 +36,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (header != null && header.startsWith(PREFIXO_BEARER)) {
             String token = header.substring(PREFIXO_BEARER.length());
 
-            if (jwtService.tokenValido(token)) {
-                String email = jwtService.extrairEmail(token);
+            if (jwtTokenGerador.tokenValido(token)) {
+                String email = jwtTokenGerador.extrairEmail(token);
                 var authentication = new UsernamePasswordAuthenticationToken(
                         email, null, List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
                 SecurityContextHolder.getContext().setAuthentication(authentication);

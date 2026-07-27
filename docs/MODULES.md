@@ -62,11 +62,11 @@ Seguir o processo definido em `NEW_MODULE_GUIDE.md` antes de adicionar um módul
 - Estado: `disponível`
 - Data de inclusão: 2026-07-22
 - Categoria: produto
-- Rotas principais: `GET /relatorios/{id}` (Serviço A, JWT admin)
-- Propósito: administrador consulta o status e o conteúdo de um relatório.
+- Rotas principais: `GET /relatorios/{id}` (Serviço A, JWT admin), `GET /relatorios` (Serviço A, JWT admin — lista todos, ordenados por `solicitadoEm` desc)
+- Propósito: administrador consulta o status e o conteúdo de um relatório, ou lista todos os já gerados.
 - Público: administradores.
 - Responsável pela lógica: módulo `relatorio` no Serviço A (`backend/`).
-- Limitações conhecidas: nenhuma listagem paginada de todos os relatórios nesta primeira versão, apenas consulta por id. Só existem relatórios do tipo agendado (ver ADR-005 em `DECISIONS.md` — solicitação sob demanda foi removida).
+- Limitações conhecidas: listagem sem paginação (volume esperado é baixo, relatório é gerado no máximo semanalmente). Só existem relatórios do tipo agendado (ver ADR-005 em `DECISIONS.md` — solicitação sob demanda foi removida).
 
 ---
 

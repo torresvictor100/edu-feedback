@@ -34,6 +34,30 @@ class RelatorioIntegrationTest extends IntegrationTestBase {
                 .andExpect(status().isNotFound());
     }
 
+    @Test
+    void deveRejeitarListagemSemToken() throws Exception {
+        mockMvc.perform(get("/relatorios"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void deveListarRelatoriosComTokenValido() throws Exception {
+        String token = obterTokenAdmin();
+
+        mockMvc.perform(get("/relatorios")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void deveRetornarRequisicaoInvalidaParaIdMalformado() throws Exception {
+        String token = obterTokenAdmin();
+
+        mockMvc.perform(get("/relatorios/nao-e-um-uuid")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest());
+    }
+
     private String obterTokenAdmin() throws Exception {
         String responseBody = mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
