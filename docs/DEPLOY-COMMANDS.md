@@ -239,7 +239,85 @@ az role assignment create \
 #   AZURE_RESOURCE_GROUP=rg-edu-feedback
 ```
 
-Atenção: o `deploy-azure.yml` hoje usa `app-edu-feedback`/`app-func-edu-feedback` como nome
-dos Container Apps (linhas 48 e 76) — não bate com os nomes reais provisionados
-(`app-edufeedback01-dev`/`app-func-edufeedback01-dev`). Precisa corrigir o workflow antes de
-confiar nele — isso é uma mudança de código, então não fiz sem sua aprovação.
+~~Atenção: o `deploy-azure.yml` hoje usa `app-edu-feedback`/`app-func-edu-feedback` como nome
+dos Container Apps (linhas 48 e 76) — não bate com os nomes reais provisionados.~~ ✅ Corrigido
+em 2026-07-27: o workflow já usa `app-edufeedback01-dev`/`app-func-edufeedback01-dev`.
+
+## 15. Governança do repositório GitHub (revisar/remover quando não precisar mais)
+
+Configurado em 2026-07-27 porque o repo é público (exigência do enunciado) e o workflow de
+deploy dispara em `push` para `main` — essas 3 travas impedem alguém sem permissão de
+push/PR de acionar ou aprovar um deploy sem você saber. Nenhuma delas afeta o pipeline em si
+(o workflow só dispara em `push`/`workflow_dispatch`, nunca em `pull_request`, e a federated
+credential só aceita token vindo deste repo exato — um fork não consegue autenticar de
+qualquer forma).
+
+**Interaction limit** — só colaboradores (hoje, só você) podem abrir PR/issue/comentário.
+**Expira sozinho em 2027-01-27** (teto de 6 meses da API do GitHub, não existe opção
+permanente) — renove rodando de novo antes de vencer, ou remova se não precisar mais:
+
+```bash
+# renovar (mais 6 meses a partir de quando rodar)
+gh api --method PUT repos/torresvictor100/edu-feedback/interaction-limits \
+  --input - <<'EOF'
+{
+  "limit": "collaborators_only",
+  "expiry": "six_months"
+}
+EOF
+
+# ver se está ativo e quando expira
+gh api repos/torresvictor100/edu-feedback/interaction-limits
+
+# remover de vez
+gh api --method DELETE repos/torresvictor100/edu-feedback/interaction-limits
+```
+
+**Branch protection em `main`** — bloqueia push direto/force-push de quem não é admin do
+repo; exige PR com 1 aprovação (você, como admin, pode mergear sem esperar segunda pessoa
+porque `enforce_admins` está `false`):
+
+```bash
+gh api --method PUT repos/torresvictor100/edu-feedback/branches/main/protection \
+  --input - <<'EOF'
+{
+  "required_status_checks": null,
+  "enforce_admins": false,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 1,
+    "dismiss_stale_reviews": true
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+EOF
+
+# remover a proteção
+gh api --method DELETE repos/torresvictor100/edu-feedback/branches/main/protection
+```
+
+**Required reviewer no Environment `production`** — pausa a run do Actions esperando um
+clique manual seu de "Approve" antes de rodar os steps de deploy (autenticação Azure só
+acontece depois disso):
+
+```bash
+MY_ID=$(gh api user --jq .id)
+
+gh api --method PUT repos/torresvictor100/edu-feedback/environments/production \
+  --input - <<EOF
+{
+  "reviewers": [{"type": "User", "id": $MY_ID}],
+  "deployment_branch_policy": {
+    "protected_branches": true,
+    "custom_branch_policies": false
+  }
+}
+EOF
+
+# remover os reviewers exigidos (mantém o environment, só tira a trava de aprovação)
+gh api --method PUT repos/torresvictor100/edu-feedback/environments/production \
+  --input - <<'EOF'
+{"reviewers": []}
+EOF
+```

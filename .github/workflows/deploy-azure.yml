@@ -45,7 +45,7 @@ jobs:
       - name: Deploy no Container App
         run: |
           az containerapp update \
-            --name app-edu-feedback \
+            --name app-edufeedback01-dev \
             --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
             --image ${{ secrets.AZURE_ACR_NAME }}.azurecr.io/edu-feedback-backend:${{ github.sha }}
 
@@ -73,6 +73,6 @@ jobs:
       - name: Deploy no Container App interno
         run: |
           az containerapp update \
-            --name app-func-edu-feedback \
+            --name app-func-edufeedback01-dev \
             --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
             --image ${{ secrets.AZURE_ACR_NAME }}.azurecr.io/edu-feedback-functions:${{ github.sha }}

@@ -8,12 +8,12 @@ Este documento cruza o enunciado do desafio com o que já está pronto no reposi
 
 | Requisito | Status | Onde está |
 |---|---|---|
-| Ambiente de nuvem configurado e funcionando, com segurança e governança de acesso | 🟡 Infra pronta como código, **não provisionada de verdade** | `infra/azure/main.bicep` (RBAC real: `AcrPull`, `Key Vault Secrets User` para cada Container App/Job) |
-| Configuração dos componentes de suporte (banco de dados etc.) | 🟡 Definido no Bicep, **não provisionado** | PostgreSQL Flexible Server em `main.bicep` |
-| Deploy automatizado dos componentes atualizáveis (Serviço B) | 🟡 Pipeline pronto, **nunca executado** | `.github/workflows/deploy-azure.yml` |
+| Ambiente de nuvem configurado e funcionando, com segurança e governança de acesso | 🟢 Provisionado e respondendo na Azure real (2026-07-27) | `infra/azure/main.bicep` (RBAC real: `AcrPull`, `Key Vault Secrets User` para cada Container App/Job) — validado via Postman contra a URL pública do Serviço A: health check, login, avaliação, listagem de relatórios, tudo 200/201 |
+| Configuração dos componentes de suporte (banco de dados etc.) | 🟢 Provisionado e em uso real | PostgreSQL Flexible Server em `main.bicep` — avaliações e relatórios sendo persistidos/consultados de verdade |
+| Deploy automatizado dos componentes atualizáveis (Serviço B) | 🟡 Pipeline pronto, **nunca executado** — build/deploy de imagem feito manualmente (`az acr build` + `az containerapp update`, ver `docs/DEPLOY-COMMANDS.md`) | `.github/workflows/deploy-azure.yml` |
 | Aplicação monitorada | 🟡 Alertas definidos no Bicep, **não provisionados** | Application Insights + 2 Metric Alerts + Action Group em `main.bicep` |
-| Notificações automáticas para itens críticos | 🟢 Implementado e testado localmente | Job `job-feedback-critico` (Event/KEDA) + `FeedbackCriticoResource` (Quarkus) |
-| Relatório semanal com média de avaliações | 🟢 Implementado e testado localmente | Job `job-relatorio-agendado` (Schedule) + `RelatorioAgendadoResource` (Quarkus, cron padrão semanal) |
+| Notificações automáticas para itens críticos | 🟢 Implementado e testado localmente; endpoint aceitou avaliação crítica em produção via Postman (201, urgência CRITICA) — **falta confirmar** se o e-mail chegou de verdade via Azure Communication Services | Job `job-feedback-critico` (Event/KEDA) + `FeedbackCriticoResource` (Quarkus) |
+| Relatório semanal com média de avaliações | 🟢 Implementado, testado localmente e validado na Azure real (2026-07-27): `az containerapp job start` disparou o Job, que gerou e persistiu um novo relatório, confirmado via `GET /relatorios` — cadeia Job → Container App interno → `RelatorioService` → Postgres funcionando de ponta a ponta. O disparo automático pelo cron semanal (`0 8 * * 1`) em si ainda não foi observado (só o disparo manual) | Job `job-relatorio-agendado` (Schedule) + `RelatorioAgendadoResource` (Quarkus, cron padrão semanal) |
 
 🟢 = pronto e validado localmente · 🟡 = código/infra pronta, falta executar na Azure de verdade · 🔴 = não existe ainda
 
@@ -22,7 +22,7 @@ Este documento cruza o enunciado do desafio com o que já está pronto no reposi
 | Regra | Status |
 |---|---|
 | Implementar serverless | 🟢 2 Azure Container Apps Jobs (Schedule + Event/KEDA, ver ADR-007), cada um repassando para um endpoint Quarkus interno |
-| Rodar em ambiente cloud | 🟡 Desenhado para Azure; falta o provisionamento real |
+| Rodar em ambiente cloud | 🟢 Provisionado e rodando na Azure (Serviço A validado via Postman contra a URL real; Serviço B validado indiretamente pelo relatório persistido/consultado) |
 | Mínimo 2 funções serverless, com Responsabilidade Única por componente | 🟢 Exatamente 2 componentes serverless, cada um com um único trigger e uma única responsabilidade (ver ADR-005, ADR-006 e ADR-007 em `DECISIONS.md`) |
 
 ## 3. Artefatos de entrega
@@ -37,7 +37,7 @@ Este documento cruza o enunciado do desafio com o que já está pronto no reposi
 | Critério | Status |
 |---|---|
 | Explicação do modelo de cloud escolhido e dos componentes envolvidos | 🟢 Documentado em `TECH-SPEC.md` (seções 1, 6, 7) e `ARCHITECTURE.md` — reforçar falando isso no vídeo |
-| Funcionamento correto da aplicação | 🟡 Correto localmente (testes automatizados passando); falta validar rodando de verdade na Azure |
+| Funcionamento correto da aplicação | 🟢 Correto localmente (testes automatizados passando) e validado rodando de verdade na Azure (Postman: health check, login, avaliação normal/crítica, listagem de relatórios — todos 200/201 contra a URL pública) |
 | Qualidade do código, com documentação | 🟢 `AGENTS.md`, `docs/`, javadoc nos pontos não óbvios, testes unitários e de integração |
 | Descrição do projeto: arquitetura, instruções de deploy, monitoramento, documentação das funções | 🟢 `ARCHITECTURE.md`, `AZURE-DEPLOY.md`, `TECH-SPEC.md` (seção 10) |
 | Configuração do ambiente de nuvem e funções serverless, com explicações do modelo e segurança | 🟡 Desenhado e documentado; falta executar e depois explicar o que rodou de verdade (não só o que está no código) |
@@ -59,7 +59,7 @@ cd backend && ./mvnw spring-boot:run
 
 Teste manual com a coleção Postman (`postman/edu-feedback.postman_collection.json` + `postman/local.postman_environment.json`): health check, login, enviar avaliação normal e crítica, consultar relatório.
 
-### Passo 2 — Preparar a conta Azure
+### Passo 2 — Preparar a conta Azure ✅ Feito (2026-07-27, ambiente `dev`, `rg-edu-feedback`)
 
 1. Ter uma assinatura Azure ativa (conta de estudante/trial serve).
 2. `az login` e `az account set --subscription "<id>"`.
@@ -68,7 +68,7 @@ Teste manual com a coleção Postman (`postman/edu-feedback.postman_collection.j
    az group create --name rg-edu-feedback --location brazilsouth
    ```
 
-### Passo 3 — Preencher os parâmetros reais (nunca commitar isso)
+### Passo 3 — Preencher os parâmetros reais (nunca commitar isso) ✅ Feito
 
 ```bash
 cp infra/azure/main.parameters.example.json infra/azure/main.parameters.json
@@ -76,7 +76,7 @@ cp infra/azure/main.parameters.example.json infra/azure/main.parameters.json
 
 Editar `infra/azure/main.parameters.json` com valores reais de `postgresAdminPassword`, `jwtSecret`, `internalTriggerSecret` (segredo entre os gatilhos nativos e os endpoints internos do Serviço B) e `alertNotificationEmail` (o e-mail que vai receber os alertas).
 
-### Passo 4 — Validar e provisionar a infraestrutura
+### Passo 4 — Validar e provisionar a infraestrutura ✅ Feito (infra provisionada e respondendo em `rg-edu-feedback`)
 
 ```bash
 az deployment group validate \
@@ -104,12 +104,12 @@ Depois do `create`, aceite o e-mail de confirmação do Action Group (chega em `
 
 ### Passo 6 — Verificar que subiu certo
 
-- `curl https://<containerAppFqdn>/actuator/health` → `{"status":"UP"}`.
-- Portal do Container Apps Job → `job-relatorio-agendado-...` e `job-feedback-critico-...` → aba "Execution history" com execuções "Succeeded".
-- Rodar manualmente um Job para validar sem esperar o cron/a fila: `az containerapp job start --name job-relatorio-agendado-edufeedback-<ambiente> --resource-group <rg>` — deve responder 200 no endpoint interno e persistir o relatório (sem o `X-Internal-Secret` correto, o endpoint responde 401 — confirma que a chamada Job → Container App interno funciona de verdade em produção, não só localmente).
-- Monitor → Alerts → Alert rules → os 2 alertas como "Enabled".
-- Rodar a coleção Postman contra a URL real do Container App.
-- Enviar uma avaliação crítica (nota ≤ 3) de teste e confirmar que o e-mail chega via Azure Communication Services.
+- ✅ `curl https://<containerAppFqdn>/actuator/health` → `{"status":"UP"}` (2026-07-27, via Postman).
+- ✅ `job-relatorio-agendado`: disparo manual (`az containerapp job start`) confirmado em 2026-07-27 — execução gerou e persistiu um novo relatório, visível em seguida via `GET /relatorios`. `job-feedback-critico` **ainda não confirmado** por esse mesmo caminho (ver bullet do e-mail abaixo).
+- ✅ Rodar manualmente um Job para validar sem esperar o cron/a fila — feito para `job-relatorio-agendado` (respondeu 200 no endpoint interno e persistiu o relatório, confirma que a chamada Job → Container App interno funciona de verdade em produção). Falta repetir para `job-feedback-critico`.
+- Monitor → Alerts → Alert rules → os 2 alertas como "Enabled". **Ainda não confirmado**.
+- ✅ Rodar a coleção Postman contra a URL real do Container App (2026-07-27, 10/10 testes passando).
+- Enviar uma avaliação crítica (nota ≤ 3) de teste e confirmar que o e-mail chega via Azure Communication Services. **Parcial**: avaliação crítica foi aceita pela API (201, urgência CRITICA) — falta confirmar recebimento do e-mail.
 - Se algum dos 2 Container Apps ou 2 Jobs falhar por causa do Key Vault, reiniciar a revision do Container App afetado ou aguardar a próxima execução do Job (a role RBAC pode levar alguns minutos para se propagar — ver nota em `main.bicep`).
 
 ### Passo 7 — Trocar credenciais de desenvolvimento
