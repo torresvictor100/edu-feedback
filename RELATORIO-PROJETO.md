@@ -196,6 +196,14 @@ Cada job faz login na Azure separadamente via **OIDC** (`azure/login@v2` com `cl
 
 **Segurança do deploy — aprovação manual do administrador:** os dois jobs declaram `environment: production`. Em **Settings → Environments → production → Deployment protection rules**, foi habilitado **"Required reviewers"**, com o administrador do repositório cadastrado como aprovador obrigatório. Na prática, isso significa que **nenhum deploy chega na Azure sem uma aprovação manual explícita**: mesmo que o push em `main` dispare o workflow automaticamente, a execução fica pausada em "Waiting for review" até o administrador entrar na aba Actions e clicar em "Approve and deploy" — evitando que qualquer merge acidental (ou um PR malicioso, num cenário com múltiplos colaboradores) publique código em produção sem revisão humana.
 
+**Evidência — os dois jobs de deploy parados aguardando aprovação**, cada um marcado como "production waiting for review":
+
+![Workflow "Deploy Azure" com os dois jobs (Serviço A e Serviço B) parados em "Waiting" até a aprovação manual](img/review.png)
+
+**Evidência — tela de aprovação, com o administrador prestes a revisar e liberar o deploy** ("Review pending deployments", com as opções "Reject" ou "Approve and deploy"):
+
+![Modal de revisão de deploy pendente, com o ambiente "production" marcado e o botão "Approve and deploy"](img/aprovar.png)
+
 ### 3.3 Verificação pós-deploy
 
 - `GET https://<containerAppFqdn>/actuator/health` → `{"status":"UP"}`.
