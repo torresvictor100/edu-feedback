@@ -12,11 +12,13 @@ O EduFeedback é uma plataforma para avaliação de aulas: estudantes enviam fee
 
 O projeto atende aos requisitos obrigatórios do desafio:
 
-- Aplicação hospedada em ambiente de nuvem (Microsoft Azure).
-- No mínimo duas funções serverless, cada uma com responsabilidade única.
-- Deploy automatizado dos componentes atualizáveis.
-- Aplicação monitorada, com notificações automáticas para problemas críticos.
-- Relatório semanal com média de avaliações.
+- **Ambiente de nuvem configurado e funcionando**, com configurações de segurança relacionadas aos dados de clientes e com governança de acesso (Microsoft Azure — detalhes e evidências nas seções 2.5 e 3.4).
+- **Configuração dos componentes de suporte** (banco de dados etc.) — seção 2.4.
+- No mínimo duas funções serverless, cada uma com responsabilidade única (seção 5).
+- Deploy automatizado dos componentes atualizáveis (seção 3).
+- **Aplicação monitorada** (seção 4.1 e 4.2).
+- **Notificações automáticas aos administradores para problemas críticos** (seção 4.2 e 5.1).
+- Relatório semanal com média de avaliações (seção 5.2).
 
 A solução foi dividida em **dois serviços independentes**, que compartilham o mesmo banco de dados PostgreSQL:
 
@@ -58,13 +60,19 @@ Serviço B — Container App interno (Quarkus, sem ingress externo)
 
 ### 2.2 Modelo de nuvem escolhido
 
-**Azure Container Apps** para tudo — API sempre ativa (Serviço A), endpoint interno (Serviço B) e os dois componentes serverless (Container Apps Jobs). Essa escolha unificou toda a solução numa única plataforma gerenciada, sem Kubernetes para administrar, com:
+**Azure Container Apps** para tudo — API pública (Serviço A), endpoint interno (Serviço B) e os dois componentes serverless (Container Apps Jobs). Essa escolha unificou toda a solução numa única plataforma gerenciada, sem Kubernetes para administrar.
 
-- **Serviço A** — Container App público, com ingress externo, `minReplicas: 0` a 3 réplicas, escala automática.
-- **Serviço B (endpoint interno)** — Container App **sem ingress externo**, só alcançável de dentro do Container Apps Environment (ou seja, só os 2 Jobs conseguem chamá-lo).
-- **Serviço B (gatilhos)** — 2 **Container Apps Jobs**, cobrados por execução, `minExecutions: 0` (nada fica rodando entre disparos) — esse é o componente serverless propriamente dito exigido pelo desafio.
+**Por que Container Apps, e não App Service ou uma VM:** o principal motivo foi custo viável para um projeto de estudo. O Container Apps permite configurar `minReplicas: 0` — ou seja, o container **fica desligado (custo zero de computação) quando não há requisição chegando**, e só sobe automaticamente quando alguém acessa a aplicação (scale-from-zero). Isso evita pagar por um servidor ligado 24/7 só pra atender um volume de uso baixo, típico de um projeto acadêmico, sem abrir mão de a aplicação continuar disponível sob demanda.
 
-O projeto passou por três desenhos até chegar aqui: começou com Azure Functions puro, depois um híbrido Quarkus + Azure Functions Java Worker, e por fim migrou os gatilhos de Azure Functions para Container Apps Jobs — eliminando a necessidade de uma segunda plataforma de deploy só para hospedar os gatilhos, mantendo o requisito de serverless (execuções sob demanda, sem servidor dedicado).
+Essa mesma lógica de custo se aplica a cada componente, mas com um comportamento de escala ligeiramente diferente por papel:
+
+- **Serviço A** — Container App público, com ingress externo, `minReplicas: 0` a 3 réplicas. Fica "dormindo" sem custo quando ninguém envia avaliação ou faz login, e escala automaticamente (com um pequeno cold start) na primeira requisição.
+- **Serviço B (endpoint interno)** — Container App **sem ingress externo**, também com `minReplicas: 0`. Não fica exposto à internet — só é alcançável de dentro do Container Apps Environment, ou seja, só os 2 Jobs abaixo conseguem chamá-lo — e só "acorda" quando um dos Jobs o aciona.
+- **Serviço B (gatilhos)** — 2 **Container Apps Jobs**, cobrados por execução, `minExecutions: 0` (nada fica rodando entre disparos). Esse é o componente serverless propriamente dito exigido pelo desafio: o Job só existe pelo tempo da execução (segundos), depois é desalocado por completo — o modelo de cobrança mais barato possível para uma tarefa que roda uma vez por semana ou só quando chega um feedback crítico.
+
+**Por que a solução foi dividida em dois serviços (e não uma aplicação única):** essa separação não foi só uma escolha de organização de código — ela existe **para atender a uma exigência obrigatória da atividade**: o enunciado exige, no mínimo, dois componentes serverless com responsabilidade única, além de deixar clara a separação entre serviços como parte da avaliação. Colocar tudo dentro do Serviço A quebraria essa regra (a API principal roda sempre ativa, não é serverless) e misturaria responsabilidades (login/feedback junto com notificação/relatório). Por isso o Serviço B existe como unidade separada, hospedado nos Jobs serverless — cada um dos 2 Jobs cobre exatamente uma das duas automações que o enunciado pede ("o envio de notificações e a geração de relatórios"), com fronteira clara de responsabilidade entre os dois serviços e entre os dois componentes dentro do Serviço B.
+
+O projeto passou por três desenhos até chegar aqui: começou com Azure Functions puro, depois um híbrido Quarkus + Azure Functions Java Worker, e por fim migrou os gatilhos de Azure Functions para Container Apps Jobs — eliminando a necessidade de uma segunda plataforma de deploy só para hospedar os gatilhos, mantendo o requisito de serverless (execuções sob demanda, sem servidor dedicado) e reforçando o mesmo racional de custo: um único Container Apps Environment hospeda tudo, em vez de manter Function App e Container Apps como duas faturas/plataformas separadas.
 
 ### 2.3 Componentes provisionados (Infraestrutura como Código)
 
@@ -72,31 +80,56 @@ Todo o ambiente é provisionado via `infra/azure/main.bicep` (Bicep), em um úni
 
 | Recurso | Nome | Papel |
 |---|---|---|
-| PostgreSQL Flexible Server | `psql-edufeedback-dev` | Banco compartilhado pelos dois serviços |
-| Storage Account + fila | `stedufeedbackdev` | Fila `notificacoes-criticas` |
-| Azure Container Registry | `acredufeedbackdev` | Imagens Docker dos dois serviços |
-| Container Apps Environment | `cae-edufeedback-dev` | Ambiente único compartilhado por todos os Container Apps/Jobs |
-| Container App (Serviço A) | `app-edufeedback-dev` | API pública, ingress externo |
-| Container App (Serviço B) | `app-func-edufeedback-dev` | Endpoints internos Quarkus, sem ingress externo |
-| Container Apps Job (Schedule) | `job-relat-edufeedback-dev` | Gatilho semanal do relatório |
-| Container Apps Job (Event/KEDA) | `job-crit-edufeedback-dev` | Gatilho por fila da notificação crítica |
-| Application Insights + Log Analytics | `appi-`/`log-edufeedback-dev` | Observabilidade dos dois serviços |
-| Key Vault | `kv-edufeedback-dev` | 4 segredos (senha do Postgres, JWT, segredo interno, connection string) |
-| Azure Communication Services | `acs-edufeedback-dev` | Envio de e-mail |
-| Action Group + 2 Metric Alerts | `ag-`/`alert-excecoes-`/`alert-postgres-cpu-edufeedback-dev` | Notificação por e-mail em exceções e CPU alta |
+| PostgreSQL Flexible Server | `psql-edufeedback01-dev` | Banco compartilhado pelos dois serviços |
+| Storage Account + fila | `stedufeedback01dev` | Fila `notificacoes-criticas` |
+| Azure Container Registry | `acredufeedback01dev` | Imagens Docker dos dois serviços |
+| Container Apps Environment | `cae-edufeedback01-dev` | Ambiente único compartilhado por todos os Container Apps/Jobs |
+| Container App (Serviço A) | `app-edufeedback01-dev` | API pública, ingress externo |
+| Container App (Serviço B) | `app-func-edufeedback01-dev` | Endpoints internos Quarkus, sem ingress externo |
+| Container Apps Job (Schedule) | `job-relat-edufeedback01-dev` | Gatilho semanal do relatório |
+| Container Apps Job (Event/KEDA) | `job-crit-edufeedback01-dev` | Gatilho por fila da notificação crítica |
+| Application Insights + Log Analytics | `appi-`/`log-edufeedback01-dev` | Observabilidade dos dois serviços |
+| Key Vault | `kv-edufeedback01-dev` | 4 segredos (senha do Postgres, JWT, segredo interno, connection string) |
+| Azure Communication Services | `acs-edufeedback01-dev` | Envio de e-mail |
+| Action Group + 2 Metric Alerts | `ag-`/`alert-excecoes-`/`alert-postgres-cpu-edufeedback01-dev` | Notificação por e-mail em exceções e CPU alta |
 
-### 2.4 Segurança e governança de acesso
+### 2.4 Configuração dos componentes de suporte
 
-- **Identidade gerenciada (User-Assigned)** própria para os Container Apps (`id-apps-edufeedback-dev`) e para os Jobs (`id-jobs-edufeedback-dev`) — nenhuma credencial de longa duração fica no template ou nas variáveis de ambiente.
-- **RBAC de menor privilégio**, concedido explicitamente no Bicep:
+Além dos Container Apps/Jobs (seção 2.2), a solução depende de componentes de suporte gerenciados pela Azure — banco de dados, fila, registro de imagens, cofre de segredos e envio de e-mail. Todos provisionados via `infra/azure/main.bicep`, com configuração explícita (não é só "criar com o padrão"):
+
+| Componente | Configuração aplicada |
+|---|---|
+| **PostgreSQL Flexible Server** (`psql-edufeedback01-dev`) | Versão 16, SKU `Standard_B1ms` (Burstable), 32 GB de armazenamento, **backup automático com retenção de 7 dias**, banco `edufeedback`, firewall restrito à regra `AllowAzureServices` |
+| **Storage Account** (`stedufeedback01dev`) | `StorageV2`, SKU `Standard_LRS`, `minimumTlsVersion: TLS1_2`, `allowBlobPublicAccess: false`, fila `notificacoes-criticas` provisionada dentro dela |
+| **Azure Container Registry** (`acredufeedback01dev`) | SKU `Basic`, `adminUserEnabled: false` — só é possível fazer push/pull via identidade gerenciada com role `AcrPull`, nunca por usuário/senha de admin |
+| **Key Vault** (`kv-edufeedback01-dev`) | `enableRbacAuthorization: true` (acesso só via role RBAC, não por access policy antiga), guarda os 4 segredos usados pelos dois serviços |
+| **Azure Communication Services** (`acs-edufeedback01-dev`) | `dataLocation: Brazil`, usado só para o envio do e-mail de notificação crítica |
+| **Application Insights + Log Analytics** (`appi-`/`log-edufeedback01-dev`) | Retenção de 30 dias, workspace único compartilhado pelos dois serviços |
+
+**Evidência de que estão configurados e em uso real:** o Serviço A e o Serviço B conectam no PostgreSQL na inicialização (sem isso o health check falharia) e as migrations Flyway já rodaram no schema `edufeedback`; a fila `notificacoes-criticas` recebeu mensagem real ao enviar uma avaliação crítica via Postman; o ACR tem as imagens publicadas pelo pipeline de deploy; o Key Vault tem os 4 segredos criados e as roles `Key Vault Secrets User` concedidas às identidades gerenciadas (sem isso os Container Apps/Jobs falham ao subir — ver seção 3.3).
+
+### 2.5 Segurança e governança de acesso
+
+**Governança de acesso (identidade e permissões):**
+
+- **Identidade gerenciada (User-Assigned)** própria para os Container Apps (`id-apps-edufeedback01-dev`) e para os Jobs (`id-jobs-edufeedback01-dev`) — nenhuma credencial de longa duração fica no template ou nas variáveis de ambiente.
+- **RBAC de menor privilégio**, concedido explicitamente no Bicep — nenhuma identidade tem mais acesso do que precisa:
   - Container Apps → `AcrPull` (puxar imagem) + `Key Vault Secrets User` (ler segredos).
   - Jobs → só `Key Vault Secrets User`.
-- **Todos os segredos** (`postgres-admin-password`, `jwt-secret`, `internal-trigger-secret`, `storage-connection-string`) ficam no **Azure Key Vault** e são referenciados nativamente pelos Container Apps/Jobs (`keyVaultUrl` + identidade gerenciada) — nunca em texto puro.
-- **Autenticação da API**: JWT stateless (HS256) só no Serviço A — `POST /avaliação` é público (contrato do desafio), login e consulta de relatório exigem token de administrador.
-- **Comunicação interna protegida**: os endpoints `/internal/*` do Serviço B são validados por um segredo compartilhado (`X-Internal-Secret`, verificado por `InternalSecretValidator`) — sem ele, retornam 401. Como o Container App que os hospeda não tem ingress externo, eles nem são alcançáveis pela internet.
-- **Deploy sem credenciais estáticas**: o pipeline usa federação **OIDC** entre GitHub Actions e Azure (App Registration + Federated Credential), sem client secret salvo em lugar nenhum.
-- Containers rodam com **usuário não-root**, build multistage (`backend/Dockerfile`, `functions/Dockerfile`).
-- Firewall do PostgreSQL restrito a `AllowAzureServices`.
+- **Deploy sem credenciais estáticas**: o pipeline usa federação **OIDC** entre GitHub Actions e Azure (App Registration + Federated Credential), sem client secret salvo em lugar nenhum — só quem tem acesso ao repositório/environment `production` do GitHub consegue disparar um deploy.
+- RBAC do próprio Azure restringe quem, na assinatura, pode alterar recursos do resource group `rg-edu-feedback`.
+
+**Segurança dos dados de clientes (estudantes e administradores):**
+
+- **Segredos nunca em texto puro**: `postgres-admin-password`, `jwt-secret`, `internal-trigger-secret` e `storage-connection-string` ficam no **Azure Key Vault** (`kv-edufeedback01-dev`) e são referenciados nativamente pelos Container Apps/Jobs (`keyVaultUrl` + identidade gerenciada) — nunca copiados como variável de ambiente em texto puro.
+- **Autenticação da API**: JWT stateless (HS256) só no Serviço A — `POST /avaliação` (dado do estudante: nota e descrição) é público por contrato do desafio, mas login e consulta de relatório (dados agregados dos alunos) exigem token de administrador válido.
+- **Senha de administrador com hash BCrypt** — nunca armazenada em texto plano no banco.
+- **Comunicação interna protegida**: os endpoints `/internal/*` do Serviço B (que leem e-mail dos administradores e avaliações para gerar relatório) são validados por um segredo compartilhado (`X-Internal-Secret`, verificado por `InternalSecretValidator`) — sem ele, `401`. Como o Container App que os hospeda **não tem ingress externo**, eles nem são alcançáveis pela internet, só de dentro do Container Apps Environment.
+- **Tráfego criptografado**: ingress do Serviço A força HTTPS; Storage Account com `minimumTlsVersion: TLS1_2` e `allowBlobPublicAccess: false` (a fila com os dados da avaliação crítica nunca é acessível publicamente).
+- **Firewall do PostgreSQL** restrito à regra `AllowAzureServices` — o banco com os dados de avaliações, relatórios e administradores não fica aberto à internet.
+- **Backup automático** do PostgreSQL Flexible Server habilitado (retenção de 7 dias).
+- Nenhum dado sensível (nota, descrição do feedback, credenciais) é escrito em log.
+- Containers rodam com **usuário não-root**, build multistage (`backend/Dockerfile`, `functions/Dockerfile`) — reduz superfície de ataque da imagem que processa os dados.
 
 ---
 
@@ -129,23 +162,61 @@ Isso cria todos os recursos listados na seção 2.3. Ao final, é preciso confir
 
 ### 3.2 Deploy contínuo do código (automatizado, `.github/workflows/deploy-azure.yml`)
 
-1. Login na Azure via **OIDC** (sem senha/secret estático).
-2. Build da imagem do Serviço A a partir de `backend/Dockerfile` → push no Azure Container Registry.
-3. Build da imagem do Serviço B a partir de `functions/Dockerfile` → push no Azure Container Registry.
-4. `az containerapp update` nos dois Container Apps, apontando para a nova tag de imagem.
-5. Os 2 Container Apps Jobs **não** fazem parte deste pipeline — usam a imagem pública `mcr.microsoft.com/azure-cli`, definida direto no Bicep (só o script inline muda se `main.bicep` for alterado).
+**Gatilho do pipeline:** `push` na branch `main` (deploy automático a cada merge) ou disparo manual via `workflow_dispatch` (aba Actions → "Run workflow"), conforme declarado no topo do workflow:
 
-Pré-requisito no GitHub (Settings → Environments → `production`): secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_ACR_NAME`, `AZURE_RESOURCE_GROUP`.
+```yaml
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write   # necessário para o login OIDC, sem client secret
+  contents: read
+```
+
+**O deploy é dividido em 2 jobs independentes, um por container**, cada um construindo e publicando só a sua própria imagem:
+
+| Job | Serviço | O que faz |
+|---|---|---|
+| `deploy-backend` | Serviço A (API pública) | `./mvnw package` → `az acr build` (imagem `edu-feedback-backend:<sha do commit>`) → `az containerapp update` no Container App `app-edufeedback01-dev` |
+| `deploy-functions` | Serviço B (endpoint interno) | `az acr build` a partir de `functions/Dockerfile` (imagem `edu-feedback-functions:<sha do commit>`) → `az containerapp update` no Container App `app-func-edufeedback01-dev` |
+
+Cada job faz login na Azure separadamente via **OIDC** (`azure/login@v2` com `client-id`/`tenant-id`/`subscription-id`, sem senha nem client secret) e usa a tag da imagem = SHA do commit, garantindo rastreabilidade de qual código está publicado em cada Container App. Os 2 Container Apps Jobs (gatilhos serverless) **não** fazem parte deste pipeline — usam a imagem pública `mcr.microsoft.com/azure-cli`, definida direto no Bicep.
+
+**Configuração no GitHub (Settings → Secrets and variables → Actions, dentro do Environment `production`):**
+
+| Secret | Uso |
+|---|---|
+| `AZURE_CLIENT_ID` | Identidade da App Registration federada via OIDC |
+| `AZURE_TENANT_ID` | Tenant da assinatura Azure |
+| `AZURE_SUBSCRIPTION_ID` | Assinatura onde os recursos foram provisionados |
+| `AZURE_ACR_NAME` | Nome do Container Registry (`acredufeedback01dev`) |
+| `AZURE_RESOURCE_GROUP` | `rg-edu-feedback` |
+
+**Segurança do deploy — aprovação manual do administrador:** os dois jobs declaram `environment: production`. Em **Settings → Environments → production → Deployment protection rules**, foi habilitado **"Required reviewers"**, com o administrador do repositório cadastrado como aprovador obrigatório. Na prática, isso significa que **nenhum deploy chega na Azure sem uma aprovação manual explícita**: mesmo que o push em `main` dispare o workflow automaticamente, a execução fica pausada em "Waiting for review" até o administrador entrar na aba Actions e clicar em "Approve and deploy" — evitando que qualquer merge acidental (ou um PR malicioso, num cenário com múltiplos colaboradores) publique código em produção sem revisão humana.
 
 ### 3.3 Verificação pós-deploy
 
 - `GET https://<containerAppFqdn>/actuator/health` → `{"status":"UP"}`.
-- Testar os endpoints internos disparando manualmente um Job: `az containerapp job start --name job-relat-edufeedback-dev --resource-group rg-edu-feedback`.
+- Testar os endpoints internos disparando manualmente um Job: `az containerapp job start --name job-relat-edufeedback01-dev --resource-group rg-edu-feedback`.
 - Conferir "Execution history" dos 2 Jobs no portal (Container Apps → Jobs).
 - Rodar a coleção Postman (`postman/edu-feedback.postman_collection.json`) contra a URL pública real.
 - Enviar uma avaliação crítica (nota ≤ 3) e confirmar: mensagem na fila → Job `job-crit-*` disparado → e-mail recebido.
 
-### 3.4 Rollback
+### 3.4 Evidência de que o ambiente está configurado e funcionando de verdade
+
+Não é só infraestrutura como código pronta e nunca aplicada — o ambiente foi provisionado na assinatura Azure real (resource group `rg-edu-feedback`) e validado em produção (ambiente `dev`):
+
+- Todos os recursos da seção 2.3 provisionados e respondendo no resource group `rg-edu-feedback`.
+- Coleção Postman executada contra a URL pública real do Serviço A: **health check, login, envio de avaliação normal, envio de avaliação crítica e listagem de relatórios — todos retornando 200/201**.
+- Job `job-relat-edufeedback01-dev` disparado manualmente (`az containerapp job start`) — a execução chamou o endpoint interno, gerou e persistiu um relatório real, confirmado em seguida via `GET /relatorios`, comprovando a cadeia completa Job → Container App interno → banco de dados.
+- Avaliação crítica (nota ≤ 3) aceita pela API em produção (`201`, campo `urgencia: CRITICA`), confirmando que o fluxo de enfileiramento está ativo.
+- Os alertas de monitoramento (seção 4.2) aparecem como **Habilitados** no portal, com o Action Group de e-mail confirmado.
+
+Ou seja: o ambiente de nuvem não está apenas "configurado" no papel — está provisionado e funcionando na Azure real, o que pode ser demonstrado ao vivo no vídeo de entrega repetindo qualquer um dos passos acima.
+
+### 3.5 Rollback
 
 - Serviço A / Serviço B (Container Apps): `az containerapp revision list` + `az containerapp update --image <imagem-anterior>`.
 - Jobs: não versionam imagem própria (usam `mcr.microsoft.com/azure-cli`); qualquer rollback de comportamento é feito revertendo `infra/azure/main.bicep`.
@@ -157,7 +228,7 @@ Pré-requisito no GitHub (Settings → Environments → `production`): secrets `
 
 ### 4.1 Observabilidade
 
-- **Application Insights** (`appi-edufeedback-dev`), com **Log Analytics Workspace** (`log-edufeedback-dev`) como back-end, conectado aos dois Container Apps via `APPLICATIONINSIGHTS_CONNECTION_STRING`.
+- **Application Insights** (`appi-edufeedback01-dev`), com **Log Analytics Workspace** (`log-edufeedback01-dev`) como back-end, conectado aos dois Container Apps via `APPLICATIONINSIGHTS_CONNECTION_STRING`.
 - Serviço A expõe **Actuator** (`/actuator/health`, `/actuator/metrics`), usado como health check do Container App.
 - Serviço B expõe **SmallRye Health** (`/health`) no Container App interno; os 2 Jobs são observados pelos logs estruturados (stdout/stderr) e pelo histórico de execuções em Container Apps Jobs.
 - No portal: **Monitor → Métricas/Logs**, ou dentro de cada recurso (App/Job/Postgres), aba **Monitoring**.
@@ -168,50 +239,109 @@ Provisionados como código em `infra/azure/main.bicep`, com um **Action Group** 
 
 | Alerta | Condição | Severidade | Recurso monitorado | Tipo de recurso | Status |
 |---|---|---|---|---|---|
-| `alert-excecoes-edufeedback-dev` | `exceptions/count > 0` — qualquer exceção reportada no Application Insights | 2 — Aviso | `appi-edufeedback-dev` | Application Insights | 🟢 Habilitado |
 | `alert-excecoes-edufeedback01-dev` | `exceptions/count > 0` — qualquer exceção reportada no Application Insights | 2 — Aviso | `appi-edufeedback01-dev` | Application Insights | 🟢 Habilitado |
-| `alert-postgres-cpu-edufeedback-dev` | `cpu_percent > 80` — CPU do PostgreSQL acima de 80% | 3 — Informativo | `psql-edufeedback-dev` | Banco de Dados do Azure para servidor flexível | 🟢 Habilitado |
 | `alert-postgres-cpu-edufeedback01-dev` | `cpu_percent > 80` — CPU do PostgreSQL acima de 80% | 3 — Informativo | `psql-edufeedback01-dev` | Banco de Dados do Azure para servidor flexível | 🟢 Habilitado |
 
-Todos os alertas disparam um **Action Group** de e-mail, que envia a notificação para o administrador cadastrado (`alertNotificationEmail`). Existem duas séries de alertas (`-dev` e `01-dev`) porque o ambiente foi provisionado/reprovisionado durante a validação — ambas as séries permanecem habilitadas e monitorando seus respectivos recursos.
+Ambos disparam o mesmo **Action Group** de e-mail, que envia a notificação para o administrador cadastrado (`alertNotificationEmail`).
 
-Adicionalmente, durante a validação manual do monitoramento, foi criado pelo portal um alerta extra de teste sobre o Container App (`app-edufeedback01-dev`, CPU > 10%, grupo de ações `monitorar-edu`/`monitor-cpu` com e-mail `torresvictor100@gmail.com`), usado para demonstrar de ponta a ponta o recebimento real da notificação por e-mail no vídeo de entrega.
+Adicionalmente, durante a validação manual do monitoramento, foi criado pelo portal um alerta extra de teste sobre o Container App do Serviço A (CPU acima de um limite baixo, ex. 10%), usado para demonstrar de ponta a ponta o recebimento real da notificação por e-mail no vídeo de entrega.
+
+### 4.3 Por que só esses alertas
+
+O EduFeedback é uma aplicação de porte pequeno, sem tráfego alto nem múltiplos serviços em cadeia — não faz sentido instrumentar dezenas de métricas/dashboards que ninguém vai olhar de verdade. A escolha foi cobrir só os dois cenários de falha que realmente importam para o negócio, com um alerta cada:
+
+1. **Qualquer exceção não tratada** (`alert-excecoes-*`) — cobre, de uma vez, erros da API (Serviço A) **e** falha de execução dos Jobs/endpoint interno (Serviço B), já que ambos reportam no mesmo Application Insights. Um único alerta, um único sinal (`exceptions/count > 0`), sem precisar de um alerta por endpoint ou por serviço.
+2. **CPU do PostgreSQL acima de 80%** (`alert-postgres-cpu-*`) — o banco é o único ponto compartilhado entre os dois serviços; se ele degradar, os dois param. É o indicador mais direto de sobrecarga do componente mais crítico da solução.
+
+Alertas de latência, taxa de erro HTTP por rota, uso de memória, disco, etc. foram propositalmente deixados de fora nesta primeira versão: aumentariam a complexidade operacional (mais regras pra manter, mais e-mail pra ignorar) sem agregar sinal útil no volume de uso atual. Se o projeto crescer (mais tráfego, mais serviços dependentes entre si), esse é o primeiro lugar a expandir — mas para o escopo de hoje, dois alertas bem escolhidos cobrem exatamente o que o enunciado pede ("aplicação monitorada" + "notificação automática para problemas críticos") sem monitoramento de fachada.
 
 ---
 
 ## 5. Documentação das funções criadas
 
-O Serviço B implementa **exatamente 2 componentes serverless**, cada um com responsabilidade única. Cada um combina um **gatilho fino** (Azure Container Apps Job, sem lógica de negócio, definido só em `infra/azure/main.bicep`) com um **endpoint interno Quarkus** que concentra toda a regra de negócio (CDI, Panache), protegido por um segredo compartilhado (`X-Internal-Secret`).
+O Serviço B implementa **exatamente 2 componentes serverless**, mapeados 1:1 nas duas automações que o enunciado pede ("o envio de notificações e a geração de relatórios"), cada um respeitando a regra de **Responsabilidade Única** exigida pela atividade: um único gatilho, uma única tarefa, nada mais. Cada função combina duas peças:
+
+- um **gatilho fino** (Azure Container Apps Job, `Schedule` ou `Event`, sem nenhuma lógica de negócio, definido só como script em `infra/azure/main.bicep`) — só sabe disparar na hora certa e repassar a chamada via HTTP;
+- um **endpoint interno Quarkus** (`/internal/*`, nunca exposto à internet, protegido por um segredo compartilhado `X-Internal-Secret`) — concentra toda a regra de negócio de verdade (CDI, Panache).
 
 ### 5.1 Função 1 — Notificação de feedback crítico
 
 | Campo | Valor |
 |---|---|
-| Gatilho | Container Apps Job `job-crit-edufeedback-dev` — **Event trigger**, escalado por regra KEDA `azure-queue` sobre a fila `notificacoes-criticas` |
-| Responsabilidade única | Consumir 1 mensagem da fila e notificar os administradores por e-mail |
-| Script do gatilho | `az storage message get` (lê 1 mensagem) → `curl POST /internal/feedback-critico` → `az storage message delete` (confirma consumo) |
-| Endpoint interno | `POST /internal/feedback-critico` — classe `FeedbackCriticoResource` (`functions/.../notificacao/infrastructure/web/`) |
+| Gatilho | Container Apps Job `job-crit-edufeedback01-dev` — **Event trigger**, escalado por regra KEDA `azure-queue` sobre a profundidade da fila `notificacoes-criticas` |
+| Responsabilidade única | Consumir 1 mensagem da fila e notificar os administradores por e-mail — não calcula nada, não persiste avaliação |
+| Endpoint interno | `POST /internal/feedback-critico` — classe [`FeedbackCriticoResource`](functions/src/main/java/br/com/edufeedback/functions/notificacao/infrastructure/web/FeedbackCriticoResource.java) |
 | Autenticação | Header `X-Internal-Secret`, validado por `InternalSecretValidator`; sem ele → `401` |
-| Corpo da requisição | `{ "descricao": string, "urgencia": string, "dataEnvio": string }` |
-| Lógica de negócio | `NotificarFeedbackCriticoUseCase` — busca e-mails dos administradores (`AdminRepository`, Panache) e envia via `AzureEmailSender` (Azure Communication Services) |
-| Dados enviados no e-mail | Descrição, urgência e data de envio (conforme exigido pelo enunciado) |
+| Lógica de negócio | [`NotificarFeedbackCriticoUseCase`](functions/src/main/java/br/com/edufeedback/functions/notificacao/application/NotificarFeedbackCriticoUseCase.java) — busca e-mails dos administradores (`AdminRepository`, Panache) e envia via `AzureEmailSender` (Azure Communication Services) |
+
+**Fluxo de execução passo a passo:**
+
+1. Serviço A recebe `POST /avaliação` com nota ≤ 3 → publica a mensagem na fila `notificacoes-criticas`.
+2. KEDA detecta profundidade ≥ 1 na fila → dispara o Job `job-crit-edufeedback01-dev`.
+3. O container do Job (imagem `mcr.microsoft.com/azure-cli`) roda `az storage message get`, lê 1 mensagem.
+4. `curl -X POST /internal/feedback-critico` com o corpo da mensagem e o header `X-Internal-Secret`.
+5. `FeedbackCriticoResource` valida o segredo, delega para `NotificarFeedbackCriticoUseCase`, que busca os e-mails dos administradores e envia a notificação via Azure Communication Services.
+6. Job confirma o consumo com `az storage message delete` (evita reprocessar a mesma mensagem).
+
+**Exemplo do corpo recebido pelo endpoint** (schema do record `FeedbackCritico`, exatamente os 3 dados que o enunciado pede — descrição, urgência, data de envio):
+
+```json
+{
+  "descricao": "Não consegui acompanhar a aula, muito confuso",
+  "urgencia": "CRITICA",
+  "dataEnvio": "2026-07-28T10:15:30Z"
+}
+```
 
 ### 5.2 Função 2 — Geração de relatório agendado
 
 | Campo | Valor |
 |---|---|
-| Gatilho | Container Apps Job `job-relat-edufeedback-dev` — **Schedule trigger**, cron `0 8 * * 1` (toda segunda-feira, 08:00 UTC) |
-| Responsabilidade única | Calcular agregados das avaliações e persistir um novo relatório |
-| Script do gatilho | `curl -X POST /internal/relatorio-agendado` com `X-Internal-Secret` |
-| Endpoint interno | `POST /internal/relatorio-agendado` — classe `RelatorioAgendadoResource` (`functions/.../relatorio/infrastructure/web/`) |
+| Gatilho | Container Apps Job `job-relat-edufeedback01-dev` — **Schedule trigger**, cron `0 8 * * 1` (toda segunda-feira, 08:00 UTC) |
+| Responsabilidade única | Calcular agregados das avaliações e persistir um novo relatório — não envia e-mail, não recebe requisição de fora |
+| Endpoint interno | `POST /internal/relatorio-agendado` — classe [`RelatorioAgendadoResource`](functions/src/main/java/br/com/edufeedback/functions/relatorio/infrastructure/web/RelatorioAgendadoResource.java) |
 | Autenticação | Header `X-Internal-Secret`, validado por `InternalSecretValidator`; sem ele → `401` |
-| Lógica de negócio | `GerarRelatorioAgendadoUseCase` — lê avaliações via `AvaliacaoRepository` (Panache), calcula médias e contagens, persiste `Relatorio` via `RelatorioRepository` |
-| Dados calculados | Média de avaliações, quantidade de avaliações por dia, quantidade por urgência, lista das avaliações (descrição, urgência, data de envio) |
-| Resposta | `200 OK` com o objeto `Agregados` gerado (JSON) |
+| Lógica de negócio | [`GerarRelatorioAgendadoUseCase`](functions/src/main/java/br/com/edufeedback/functions/relatorio/application/GerarRelatorioAgendadoUseCase.java) — lê avaliações via `AvaliacaoRepository` (Panache), calcula médias e contagens, persiste `Relatorio` via `RelatorioRepository` |
+
+**Fluxo de execução passo a passo:**
+
+1. Cron do Job `job-relat-edufeedback01-dev` dispara toda segunda-feira, 08:00 UTC.
+2. O container do Job roda `curl -X POST /internal/relatorio-agendado` com o header `X-Internal-Secret` (sem corpo — a lógica lê o banco diretamente).
+3. `RelatorioAgendadoResource` valida o segredo e delega para `GerarRelatorioAgendadoUseCase`.
+4. O caso de uso lê todas as avaliações do período via `AvaliacaoRepository`, calcula média geral, contagem por dia e contagem por urgência, e monta o objeto `Agregados`.
+5. O relatório é persistido via `RelatorioRepository` (tabela `relatorios`, PostgreSQL).
+6. Endpoint responde `200 OK` com o `Agregados` gerado; administrador consulta depois via `GET /relatorios` no Serviço A.
+
+**Exemplo da resposta do endpoint** (schema do record `Agregados`, cobrindo todos os dados que o enunciado pede para o relatório semanal — descrição/urgência/data de envio por avaliação, quantidade por dia, quantidade por urgência):
+
+```json
+{
+  "mediaNota": 7.4,
+  "totalAvaliacoes": 12,
+  "quantidadePorDia": { "2026-07-21": 5, "2026-07-22": 7 },
+  "quantidadePorUrgencia": { "NORMAL": 9, "CRITICA": 3 },
+  "avaliacoes": [
+    { "descricao": "Aula muito boa, professor claro", "urgencia": "NORMAL", "dataEnvio": "2026-07-21T14:32:00Z" },
+    { "descricao": "Não consegui acompanhar a aula", "urgencia": "CRITICA", "dataEnvio": "2026-07-22T09:10:00Z" }
+  ],
+  "geradoEm": "2026-07-28T08:00:00Z"
+}
+```
+
+**Como comprovar a periodicidade semanal:** a expressão cron `0 8 * * 1` está definida na variável `cronRelatorioAgendado` de `infra/azure/main.bicep` e é aplicada ao Job no provisionamento. Para conferir no portal Azure: **Container Apps Jobs → `job-relat-edufeedback01-dev` → Configuration (ou Trigger/Schedule)** mostra `Trigger type: Schedule` e `Cron expression: 0 8 * * 1` (toda segunda-feira, 08:00 UTC). O histórico real de disparos fica em **Execution history**, dentro do mesmo Job.
 
 ### 5.3 Por que essa arquitetura (gatilho fino + endpoint interno)
 
 A extensão oficial do Quarkus para Azure Functions (`quarkus-azure-functions-http`) só suporta **gatilho HTTP** — não há suporte oficial para Timer/Queue trigger com CDI. Para manter Quarkus (objetivo de aprendizado do time) sem abrir mão do serverless real nem misturar responsabilidades, a solução foi separar em duas peças por função: um gatilho nativo (hoje, Container Apps Job) totalmente burro, que só dispara e repassa via HTTP, e um endpoint Quarkus interno — nunca exposto à internet — que concentra toda a lógica de negócio de verdade.
+
+### 5.4 Testes automatizados das duas funções
+
+Cada função tem cobertura própria, seguindo a mesma separação de camadas (`domain`/`application`/`infrastructure`):
+
+- **Unitário** — `GerarRelatorioAgendadoUseCase` e `NotificarFeedbackCriticoUseCase` testados isoladamente, mockando as portas (`AvaliacaoRepository`, `AdminRepository`, `EmailSender`, `RelatorioRepository`) — sem subir Quarkus, sem banco real.
+- **Integração** — `@QuarkusTest` + RestAssured contra os 2 endpoints internos (`/internal/relatorio-agendado`, `/internal/feedback-critico`), com Postgres real via Dev Services/Testcontainers, incluindo o caso de segredo ausente/errado (`401`).
+
+Rodar: `cd functions && mvn test`.
 
 ---
 
