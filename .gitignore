@@ -20,3 +20,6 @@ target/
 
 # Infra
 infra/azure/main.parameters.json
+
+# Postman (contém URL real do deploy e credenciais do admin seed)
+postman/azure-dev.postman_environment.json
